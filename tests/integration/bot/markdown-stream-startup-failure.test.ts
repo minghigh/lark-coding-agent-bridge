@@ -479,6 +479,15 @@ describe('markdown stream startup failures', () => {
     await waitFor(() => JSON.stringify(progressCards).includes('progress update'));
     await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_SENTINEL'));
     await waitFor(() => h.channel.sent.some((item) => Boolean((item.content as { image?: unknown }).image)));
+    await waitFor(() => h.channel.rawClient.im.v1.messageReaction.delete.mock.calls.length > 0);
+
+    expect(h.channel.rawClient.im.v1.messageReaction.create).toHaveBeenCalledWith({
+      path: { message_id: 'om_card_final' },
+      data: { reaction_type: { emoji_type: 'Typing' } },
+    });
+    expect(h.channel.rawClient.im.v1.messageReaction.delete).toHaveBeenCalledWith({
+      path: { message_id: 'om_card_final', reaction_id: 'reaction_1' },
+    });
 
     // The process card never repeats the dedicated final answer.
     const progressJson = JSON.stringify(progressCards);
