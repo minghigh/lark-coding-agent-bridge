@@ -5,7 +5,7 @@ import type { SandboxMode } from '../../config/profile-schema';
 import { log } from '../../core/logger';
 import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../../platform/spawn';
 import { SpawnFailed } from '../../runtime/errors';
-import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
+import { buildBridgeSystemPrompt, prefixBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
 import { checkAgentAvailability, type AgentAvailability } from '../preflight';
 import type {
@@ -100,7 +100,7 @@ export class CodexAdapter implements AgentAdapter {
     if (this.appServer) {
       return this.appServer.run({
         ...opts,
-        prompt: prefixBridgeSystemPrompt(opts.prompt, this.botIdentity),
+        developerInstructions: buildBridgeSystemPrompt(this.botIdentity),
       });
     }
 

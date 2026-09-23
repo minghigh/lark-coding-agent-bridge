@@ -113,6 +113,31 @@ describe('CodexAdapter system prompt wiring', () => {
     const stdin = await readAll(child.stdin);
     expect(stdin).toBe(prefixBridgeSystemPrompt('hi', undefined));
   });
+
+  it('uses app-server developer instructions without prefixing the user message', () => {
+    const adapter = new CodexAdapter({
+      binary: '/usr/local/bin/codex',
+      appServerUrl: 'ws://unused',
+      profileStateDir: '/tmp/codex-profile',
+    });
+    const appServer = adapter as unknown as {
+      appServer: { run: ReturnType<typeof vi.fn> };
+    };
+    appServer.appServer.run = vi.fn().mockReturnValue({});
+    adapter.setBotIdentity({ openId: 'ou_bot_self', name: 'Bridge' });
+
+    adapter.run({ runId: 'r1', prompt: 'hi', cwd: '/tmp' });
+
+    expect(appServer.appServer.run).toHaveBeenCalledWith({
+      runId: 'r1',
+      prompt: 'hi',
+      cwd: '/tmp',
+      developerInstructions: buildBridgeSystemPrompt({
+        openId: 'ou_bot_self',
+        name: 'Bridge',
+      }),
+    });
+  });
 });
 
 async function readAll(stream: PassThrough): Promise<string> {

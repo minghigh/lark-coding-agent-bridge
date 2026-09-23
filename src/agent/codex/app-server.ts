@@ -6,6 +6,8 @@ import type { AgentEvent, AgentRun, AgentRunOptions } from '../types';
 type JsonObject = Record<string, unknown>;
 
 interface PendingRequest {
+  socket: WebSocket;
+  timer: ReturnType<typeof setTimeout>;
   resolve: (result: JsonObject) => void;
   reject: (error: Error) => void;
 }
@@ -30,23 +32,32 @@ interface AgentRunState {
 }
 
 const DEFAULT_REASONING_EFFORT = 'xhigh';
+const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
+
+type AppServerRunOptions = AgentRunOptions & { developerInstructions?: string };
 
 /** JSON-RPC client for one local Codex app-server WebSocket endpoint. */
 export class CodexAppServer {
   private readonly url: string;
   private readonly reasoningEffort: string;
+  private readonly requestTimeoutMs: number;
   private socket: WebSocket | undefined;
   private connecting: Promise<void> | undefined;
   private requestId = 0;
   private readonly pending = new Map<number, PendingRequest>();
   private readonly runs = new Map<string, RunState>();
 
-  constructor(url: string, reasoningEffort = DEFAULT_REASONING_EFFORT) {
+  constructor(
+    url: string,
+    reasoningEffort = DEFAULT_REASONING_EFFORT,
+    requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  ) {
     this.url = url;
     this.reasoningEffort = reasoningEffort;
+    this.requestTimeoutMs = requestTimeoutMs;
   }
 
-  run(opts: AgentRunOptions): AgentRun {
+  run(opts: AppServerRunOptions): AgentRun {
     const queue = new EventQueue();
     let resolveDone!: () => void;
     const done = new Promise<void>((resolve) => {
@@ -88,7 +99,7 @@ export class CodexAppServer {
     };
   }
 
-  private async startRun(active: RunState, opts: AgentRunOptions): Promise<void> {
+  private async startRun(active: RunState, opts: AppServerRunOptions): Promise<void> {
     try {
       await this.ensureConnected();
       if (active.stopped) return this.finishRun(active, 'interrupted');
@@ -98,11 +109,17 @@ export class CodexAppServer {
             threadId: opts.threadId,
             cwd: opts.cwd,
             ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.developerInstructions
+              ? { developerInstructions: opts.developerInstructions }
+              : {}),
             sandbox: toAppSandbox(opts.sandbox),
           })
         : await this.request('thread/start', {
             cwd: opts.cwd,
             ...(opts.model ? { model: opts.model } : {}),
+            ...(opts.developerInstructions
+              ? { developerInstructions: opts.developerInstructions }
+              : {}),
             approvalPolicy: 'never',
             sandbox: toAppSandbox(opts.sandbox),
           });
@@ -121,9 +138,13 @@ export class CodexAppServer {
       if (active.stopped) return this.finishRun(active, 'interrupted');
 
       const input = [
-        { type: 'text', text: opts.prompt },
+        { type: 'text', text: opts.prompt, text_elements: [] },
         ...(opts.images ?? []).map((path) => ({ type: 'localImage', path })),
       ];
+      log.info('app-server', 'turn-start', {
+        hasThread: Boolean(opts.threadId),
+        images: opts.images?.length ?? 0,
+      });
       const turn = await this.request('turn/start', {
         threadId,
         cwd: opts.cwd,
@@ -180,9 +201,14 @@ export class CodexAppServer {
         else log.warn('app-server', 'socket-error', { message: error.message });
       });
       socket.on('close', () => {
-        if (this.socket === socket) this.socket = undefined;
+        const error = new Error('Codex app-server socket closed');
+        if (this.socket !== socket) {
+          this.rejectPending(error, socket);
+          return;
+        }
+        this.socket = undefined;
         if (!settled) finish(new Error('Codex app-server socket closed during connect'));
-        this.rejectPending(new Error('Codex app-server socket closed'));
+        this.rejectPending(error, socket);
         for (const active of this.runs.values()) {
           this.failRun(active, 'Codex app-server disconnected');
         }
@@ -201,10 +227,17 @@ export class CodexAppServer {
     }
     const id = ++this.requestId;
     return new Promise<JsonObject>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!this.pending.delete(id)) return;
+        reject(new Error(`Codex app-server request timed out: ${method}`));
+      }, this.requestTimeoutMs);
+      this.pending.set(id, { socket, timer, resolve, reject });
       socket.send(JSON.stringify({ id, method, params }), (error) => {
         if (!error) return;
+        const pending = this.pending.get(id);
+        if (!pending) return;
         this.pending.delete(id);
+        clearTimeout(pending.timer);
         reject(error);
       });
     });
@@ -225,6 +258,7 @@ export class CodexAppServer {
       const pending = this.pending.get(id);
       if (!pending) return;
       this.pending.delete(id);
+      clearTimeout(pending.timer);
       const error = objectValue(message.error);
       if (error) {
         pending.reject(new Error(stringValue(error.message) ?? 'Codex app-server request failed'));
@@ -252,6 +286,9 @@ export class CodexAppServer {
     const threadId = stringValue(params.threadId) ?? stringValue(objectValue(params.thread)?.id);
     const active = threadId ? this.runs.get(threadId) : undefined;
     if (!active || active.run.closed) return;
+    const turn = objectValue(params.turn);
+    const turnId = stringValue(params.turnId) ?? stringValue(turn?.id);
+    if (turnId && active.turnId && turnId !== active.turnId) return;
 
     switch (method) {
       case 'item/agentMessage/delta': {
@@ -341,9 +378,16 @@ export class CodexAppServer {
         });
         return;
       }
-      case 'turn/completed':
-        this.finishRun(active);
+      case 'turn/completed': {
+        const status = stringValue(turn?.status);
+        if (status === 'failed') {
+          const error = objectValue(turn?.error);
+          this.failRun(active, stringValue(error?.message) ?? 'Codex app-server turn failed');
+        } else {
+          this.finishRun(active, status === 'interrupted' ? 'interrupted' : 'normal');
+        }
         return;
+      }
       case 'error': {
         const error = objectValue(params.error);
         if (params.willRetry === true) return;
@@ -377,9 +421,11 @@ export class CodexAppServer {
     active.run.resolveDone();
   }
 
-  private rejectPending(error: Error): void {
+  private rejectPending(error: Error, socket?: WebSocket): void {
     for (const [id, pending] of this.pending) {
+      if (socket && pending.socket !== socket) continue;
       this.pending.delete(id);
+      clearTimeout(pending.timer);
       pending.reject(error);
     }
   }

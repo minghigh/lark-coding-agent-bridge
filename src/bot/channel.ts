@@ -253,6 +253,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     includeRawEvent: true,
     outbound: {
       streamThrottleMs: 400,
+      textChunkLimit: 12_000,
     },
     // SDK 1.65.0-alpha.3+ knobs.
     wsConfig: {
@@ -1032,7 +1033,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
 
   // Resolve idle-timeout for this run: scope override (on SessionEntry) wins
   // over global default (preferences). 0 / undefined = no watchdog.
-  const scopeOverride = sessions.getIdleTimeoutMinutes(scope);
+  const scopeOverride = sessions.getIdleTimeoutMinutes(
+    sessionScopeFor(controls.profileConfig, scope),
+  );
   const idleTimeoutMs =
     scopeOverride !== undefined
       ? scopeOverride > 0
