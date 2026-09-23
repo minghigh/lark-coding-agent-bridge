@@ -18,7 +18,7 @@ import type { AgentAdapter, AgentEvent } from '../agent/types';
 import { handleCardAction } from '../card/dispatcher';
 import { CallbackAuth } from '../card/callback-auth';
 import { CallbackNonceStore } from '../card/callback-store';
-import { renderCard } from '../card/run-renderer';
+import { renderCard, renderTimelineOverflowCards, renderTimelinePageText } from '../card/run-renderer';
 import {
   finalizeIfRunning,
   initialState,
@@ -1055,6 +1055,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   // Re-read prefs on every flush so toggling /config mid-stream takes
   // effect immediately. Cheap object lookups, no allocation when on.
   const filterForPrefs = (state: RunState): RunState => {
+    if (controls.profileConfig.agentKind === 'codex') return state;
     if (getShowToolCalls(controls.cfg)) return state;
     return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
   };
@@ -1195,15 +1196,32 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       }
       await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
       if (controls.profileConfig.agentKind === 'codex') {
-        const finalState = finalReplyState(progress, filterForPrefs(latestState));
+        const processState = filterForPrefs(latestState);
+        const processPages = renderTimelineOverflowCards(processState);
+        if (hasProgressContent(processState, 'card')) {
+          const pages = cardDelivered && progress.opened() && !progress.abandoned()
+            ? processPages
+            : [renderCard(processState, cardRenderOptions), ...processPages];
+          for (const card of pages) {
+            try {
+              requireMessageReceipt(await channel.send(chatId, { card }, sendOpts), 'card');
+            } catch (err) {
+              log.fail('outbound', err, { scope, type: 'codex-process-page' });
+              try {
+                requireMessageReceipt(await channel.send(chatId, { markdown: renderTimelinePageText(card) }, sendOpts), 'markdown');
+              } catch (fallbackError) {
+                log.fail('outbound', fallbackError, { scope, type: 'codex-process-page-fallback' });
+              }
+            }
+          }
+        }
+        const finalState = finalReplyState(progress, processState);
         await sendFinalReply({
           channel,
           chatId,
           scope,
           cwd,
-          state: cardDelivered && progress.opened() && !progress.abandoned()
-            ? { ...finalState, blocks: [] }
-            : finalState,
+          state: { ...finalState, blocks: processState.finalText ? finalState.blocks : [] },
           replyMode: !cardDelivered && finalState.finalText ? 'card' : 'markdown',
           sendOpts,
           cardRenderOptions,

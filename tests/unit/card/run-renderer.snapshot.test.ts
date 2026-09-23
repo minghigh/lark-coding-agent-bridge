@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderCard } from '../../../src/card/run-renderer.js';
+import { renderCard, renderTimelineOverflowCards } from '../../../src/card/run-renderer.js';
 import {
   initialState,
   markIdleTimeout,
@@ -94,9 +94,9 @@ describe('run card renderer snapshots', () => {
     const panel = running.body.elements[0] as {
       expanded: boolean;
       header: { title: { content: string } };
-      elements: Array<{ content: string }>;
+      elements: Array<{ tag: string; content?: string; expanded?: boolean }>;
     };
-    const content = panel.elements[0]?.content ?? '';
+    const content = JSON.stringify(panel.elements);
     expect(panel.expanded).toBe(true);
     expect(panel.header.title.content).toBe('Working for 42s');
     expect(panel).not.toHaveProperty('border');
@@ -107,14 +107,57 @@ describe('run card renderer snapshots', () => {
     expect(content.indexOf('`vitest run`')).toBeLessThan(content.indexOf('最后确认结果'));
     expect(content).toContain('705 tests passed');
     expect(content).not.toContain('这是最终答案');
+    expect(panel.elements.filter((element) => element.tag === 'collapsible_panel')).toHaveLength(2);
+    expect(panel.elements.filter((element) => element.tag === 'collapsible_panel').map((element) => element.expanded)).toEqual([false, false]);
 
     const done = renderCard({ ...stateFrom([...events, { type: 'done', terminationReason: 'normal' }]), elapsedMs: 42_000 }, {
       agentName: 'Codex', timeline: true,
     }) as { body: { elements: Array<{ expanded: boolean; content?: string; header?: { title: { content: string } } }> } };
-    expect(done.body.elements).toHaveLength(3);
+    expect(done.body.elements).toHaveLength(1);
     expect(done.body.elements[0]?.expanded).toBe(false);
     expect(done.body.elements[0]?.header?.title.content).toBe('Worked for 42s');
-    expect(done.body.elements[2]?.content).toBe('这是最终答案。');
+    expect(JSON.stringify(done)).not.toContain('这是最终答案。');
+  });
+
+  it('does not silently omit a long Codex tool result from the process stream', () => {
+    const tail = 'END_OF_TOOL_OUTPUT';
+    const output = `${'line of diagnostic output\n'.repeat(40)}${tail}`;
+    const card = renderCard(stateFrom([
+      { type: 'thinking', delta: '检查仓库大小。' },
+      { type: 'tool_use', id: 'size', name: 'command_execution', input: { command: 'du -sh .' } },
+      { type: 'tool_result', id: 'size', output, isError: false },
+      { type: 'thinking', delta: '继续分析结果。' },
+      { type: 'final_text', content: '结论。' },
+      { type: 'done', terminationReason: 'normal' },
+    ]), { agentName: 'Codex', timeline: true });
+    const rendered = JSON.stringify(card);
+
+    expect(rendered).toContain(tail);
+    expect(rendered).not.toContain('已省略后续内容');
+    expect(rendered.indexOf('检查仓库大小')).toBeLessThan(rendered.indexOf('du -sh .'));
+    expect(rendered.indexOf(tail)).toBeLessThan(rendered.indexOf('继续分析结果'));
+  });
+
+  it('paginates a large Codex process without losing old or new events', () => {
+    const events: AgentEvent[] = [{ type: 'thinking', delta: 'START_OF_PROCESS' }];
+    for (let index = 0; index < 30; index += 1) {
+      events.push({ type: 'tool_use', id: `${index}`, name: 'command_execution', input: { command: `cmd-${index}` } });
+      events.push({ type: 'tool_result', id: `${index}`, output: `${'output\n'.repeat(130)}END-${index}`, isError: false });
+    }
+    events.push({ type: 'thinking', delta: 'END_OF_PROCESS' });
+    events.push({ type: 'final_text', content: 'FINAL_ANSWER' });
+    events.push({ type: 'done', terminationReason: 'normal' });
+    const state = stateFrom(events);
+    const cards = [renderCard(state, { agentName: 'Codex', timeline: true }), ...renderTimelineOverflowCards(state)];
+    const rendered = cards.map((card) => JSON.stringify(card)).join('');
+
+    expect(cards.length).toBeGreaterThan(1);
+    expect(rendered).toContain('START_OF_PROCESS');
+    expect(rendered).toContain('END_OF_PROCESS');
+    expect(rendered).toContain('END-0');
+    expect(rendered).toContain('END-29');
+    expect(rendered).not.toContain('已省略');
+    expect(cards.every((card) => Buffer.byteLength(JSON.stringify(card)) < 22_000)).toBe(true);
   });
 
   it('renders done, error, interrupted, and idle-timeout terminal states', () => {

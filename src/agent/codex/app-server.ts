@@ -337,6 +337,13 @@ export class CodexAppServer {
         if (delta) active.run.queue.push({ type: 'thinking', delta });
         return;
       }
+      case 'item/reasoning/summaryPartAdded': {
+        const itemId = stringValue(params.itemId);
+        if (itemId && active.run.reasoningItems.has(itemId)) {
+          active.run.queue.push({ type: 'thinking', delta: '\n\n' });
+        }
+        return;
+      }
       case 'item/plan/delta':
       case 'item/commandExecution/outputDelta': {
         const id = stringValue(params.itemId);
@@ -663,7 +670,7 @@ function summarizeFileChanges(value: unknown): string {
     const added = diff.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).length;
     const removed = diff.split('\n').filter((line) => line.startsWith('-') && !line.startsWith('---')).length;
     const stats = added || removed ? ` · +${added} / −${removed}` : '';
-    return [`- ${icon} \`${path.replace(/`/g, '\\`')}\`${stats}`];
+    return [`- ${icon} \`${path.replace(/`/g, '\\`')}\`${stats}${diff ? `\n${diff}` : ''}`];
   });
   return lines.length ? `📝 文件变更\n\n${lines.join('\n')}` : '✅ 文件修改已完成';
 }

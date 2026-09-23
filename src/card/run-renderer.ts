@@ -4,6 +4,8 @@ import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
 const MAX_VISIBLE_TOOLS = 12;
+const TIMELINE_PAGE_MAX_BYTES = 20_000;
+const TIMELINE_CHUNK_MAX_BYTES = 4_000;
 
 interface ToolGroup {
   kind: 'tools';
@@ -26,11 +28,9 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   if (options.answerOnlyText !== undefined) return cardEnvelope(state, [markdown(options.answerOnlyText)]);
   if (options.timeline) {
     const hasProcess = state.blocks.some((block) => block.kind === 'tool' || !!block.content.trim());
+    const pages = timelinePages(state);
     return cardEnvelope(state, [
-      ...(hasProcess || state.terminal === 'running' ? [timelinePanel(state)] : []),
-      ...(state.terminal !== 'running' && state.finalText?.trim()
-        ? [...(hasProcess ? [{ tag: 'hr' }] : []), markdown(state.finalText.trim())]
-        : []),
+      ...(hasProcess || state.terminal === 'running' ? [timelinePanel(state, pages[0] ?? [], 1, pages.length)] : []),
       ...(state.terminal === 'running' ? [stopButton(options)] : []),
     ]);
   }
@@ -71,6 +71,30 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
   return cardEnvelope(state, elements);
 }
 
+/** Remaining process pages are sent as Feishu cards before the final answer. */
+export function renderTimelineOverflowCards(state: RunState): object[] {
+  const pages = timelinePages(state);
+  return pages.slice(1).map((entries, index) =>
+    cardEnvelope(state, [timelinePanel(state, entries, index + 2, pages.length)]));
+}
+
+/** Plain-message fallback for a page rejected by Feishu card delivery. */
+export function renderTimelinePageText(card: object): string {
+  const body = (card as { body?: { elements?: unknown[] } }).body;
+  const read = (element: unknown): string[] => {
+    if (!element || typeof element !== 'object') return [];
+    const item = element as {
+      tag?: string;
+      content?: string;
+      header?: { title?: { content?: string } };
+      elements?: unknown[];
+    };
+    if (item.tag === 'markdown') return item.content ? [item.content] : [];
+    return [item.header?.title?.content ?? '', ...(item.elements ?? []).flatMap(read)].filter(Boolean);
+  };
+  return (body?.elements ?? []).flatMap(read).join('\n\n');
+}
+
 function cardEnvelope(state: RunState, elements: object[]): object {
   // Mask raw emails so the Feishu tenant audit accepts streamed cards.
   return deepMaskEmails({
@@ -100,39 +124,43 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
 }
 
-function timelinePanel(state: RunState): object {
+function timelinePanel(state: RunState, elements: object[], page: number, total: number): object {
   const elapsed = state.elapsedMs === undefined ? '' : ` for ${formatElapsed(state.elapsedMs)}`;
-  const entries = state.blocks.flatMap((block) => {
-    if (block.kind === 'tool') return [timelineTool(block.tool)];
-    const content = block.content.trim();
-    return content ? [truncate(content, 1400)] : [];
-  });
-  if (state.terminal === 'error' && state.errorMsg) entries.push(`⚠️ ${state.errorMsg}`);
-  if (state.terminal === 'interrupted') entries.push('⏹ 已中断');
-  if (state.terminal === 'idle_timeout') entries.push('⏱ 无响应，已终止');
-  const recent: string[] = [];
-  let length = 0;
-  for (const entry of entries.slice(-24).reverse()) {
-    if (length + entry.length > 14000) break;
-    recent.unshift(entry);
-    length += entry.length;
-  }
-  const omitted = entries.length - recent.length;
-  const content = [
-    ...(omitted ? [`_较早的 ${omitted} 项过程已省略_`] : []),
-    ...recent,
-  ].join('\n\n') || '_正在处理…_';
   return {
     tag: 'collapsible_panel',
     expanded: state.terminal === 'running',
-    header: panelHeader(`${state.terminal === 'running' ? 'Working' : 'Worked'}${elapsed}`),
+    header: panelHeader(`${state.terminal === 'running' ? 'Working' : 'Worked'}${elapsed}${total > 1 ? ` · ${page}/${total}` : ''}`),
     vertical_spacing: '8px',
     padding: '0px',
-    elements: [markdown(content)],
+    elements: elements.length ? elements : [markdown('_正在处理…_')],
   };
 }
 
-function timelineTool(tool: ToolEntry): string {
+function timelinePages(state: RunState): object[][] {
+  const elements = state.blocks.flatMap((block) => {
+    if (block.kind === 'tool') return timelineTool(block.tool);
+    return splitByBytes(block.content, TIMELINE_CHUNK_MAX_BYTES)
+      .filter((part) => part.trim())
+      .map(markdown);
+  });
+  if (state.terminal === 'error' && state.errorMsg) elements.push(markdown(`⚠️ ${state.errorMsg}`));
+  if (state.terminal === 'interrupted') elements.push(markdown('⏹ 已中断'));
+  if (state.terminal === 'idle_timeout') elements.push(markdown('⏱ 无响应，已终止'));
+  const pages: object[][] = [[]];
+  let size = 600;
+  for (const element of elements) {
+    const bytes = Buffer.byteLength(JSON.stringify(element));
+    if (size + bytes > TIMELINE_PAGE_MAX_BYTES && pages.at(-1)!.length) {
+      pages.push([]);
+      size = 600;
+    }
+    pages.at(-1)!.push(element);
+    size += bytes;
+  }
+  return pages;
+}
+
+function timelineTool(tool: ToolEntry): object[] {
   const icon = tool.status === 'error' ? '❌' : tool.status === 'running' ? '⏳' :
     tool.name === 'command_execution' || tool.name === 'Bash' ? '⌘' :
       tool.name === 'apply_patch' || tool.name === 'Edit' || tool.name === 'Write' ? '✏️' :
@@ -147,13 +175,50 @@ function timelineTool(tool: ToolEntry): string {
   const styledHeader = terminal && divider >= 0
     ? `${header.slice(0, divider)} · \`${header.slice(divider + 3).replace(/`/g, '\\`')}\``
     : header;
-  const output = tool.output?.trim();
-  if (!output || (!terminal && tool.name !== 'apply_patch' && tool.status !== 'error')) return styledHeader;
-  const preview = truncate(output, 700);
-  if (terminal) {
-    return `${styledHeader}\n\`\`\`text\n${preview.replace(/\`\`\`/g, '\`\`\\\`')}\n\`\`\`${output.length > 700 ? '\n_输出较长，已省略后续内容_' : ''}`;
+  const input = tool.input && typeof tool.input === 'object'
+    ? tool.input as Record<string, unknown> : {};
+  const command = typeof input.command === 'string' ? input.command : undefined;
+  const inputText = command ?? (Object.keys(input).length ? JSON.stringify(input, null, 2) : '');
+  const inputParts = splitByBytes(inputText, TIMELINE_CHUNK_MAX_BYTES)
+    .map((part) => `**调用**\n\`\`\`text\n${escapeFence(part)}\n\`\`\``);
+  const outputParts = splitByBytes(tool.output ?? '', TIMELINE_CHUNK_MAX_BYTES)
+    .map((part) => `**输出**\n\`\`\`text\n${escapeFence(part)}\n\`\`\``);
+  const body = [...inputParts, ...outputParts];
+  if (body.length === 2 && Buffer.byteLength(body.join('\n\n')) < 6_000) {
+    body.splice(0, 2, body.join('\n\n'));
   }
-  return `${styledHeader}\n${preview}${output.length > 700 ? '\n_输出较长，已省略后续内容_' : ''}`;
+  if (!body.length) body.push(tool.status === 'running' ? '_运行中…_' : '_无输出_');
+  return body.map((part, index) => ({
+    tag: 'collapsible_panel',
+    expanded: tool.status === 'running',
+    header: panelHeader(`${styledHeader}${body.length > 1 ? ` · ${index + 1}/${body.length}` : ''}`),
+    vertical_spacing: '8px',
+    padding: '0px',
+    elements: [markdown(part)],
+  }));
+}
+
+function escapeFence(content: string): string {
+  return content.replace(/\`\`\`/g, '\`\`\\\`');
+}
+
+function splitByBytes(content: string, maxBytes: number): string[] {
+  if (!content) return [];
+  const parts: string[] = [];
+  let part = '';
+  let bytes = 0;
+  for (const char of content) {
+    const charBytes = Buffer.byteLength(char);
+    if (bytes + charBytes > maxBytes && part) {
+      parts.push(part);
+      part = '';
+      bytes = 0;
+    }
+    part += char;
+    bytes += charBytes;
+  }
+  if (part) parts.push(part);
+  return parts;
 }
 
 function formatElapsed(ms: number): string {

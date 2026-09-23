@@ -316,7 +316,7 @@ describe('Codex app-server event mapping', () => {
       {
         type: 'tool_result',
         id: 'file-1',
-        output: '📝 文件变更\n\n- ➕ `/workspace/pelican_bicycle.html` · +2 / −0',
+        output: '📝 文件变更\n\n- ➕ `/workspace/pelican_bicycle.html` · +2 / −0\n--- /dev/null\n+++ b/pelican_bicycle.html\n+<svg>\n+</svg>',
         isError: false,
       },
       {
@@ -358,5 +358,26 @@ describe('Codex app-server event mapping', () => {
       type: 'thinking',
       delta: 'Inspecting the bridge\n\nChecking event coverage',
     });
+  });
+
+  it('preserves boundaries between streamed reasoning summary sections', () => {
+    const { active, push } = testRun();
+    const appServer = new CodexAppServer('ws://unused') as unknown as {
+      runs: Map<string, TestRun>;
+      handleNotification(method: string, params: Record<string, unknown>): void;
+    };
+    appServer.runs.set('thread-1', active);
+    for (const [method, delta] of [
+      ['item/reasoning/summaryTextDelta', 'first thought'],
+      ['item/reasoning/summaryPartAdded', ''],
+      ['item/reasoning/summaryTextDelta', 'second thought'],
+    ] as const) {
+      appServer.handleNotification(method, { threadId: 'thread-1', itemId: 'reasoning-1', delta });
+    }
+    expect(push.mock.calls.map(([event]) => event)).toEqual([
+      { type: 'thinking', delta: 'first thought' },
+      { type: 'thinking', delta: '\n\n' },
+      { type: 'thinking', delta: 'second thought' },
+    ]);
   });
 });

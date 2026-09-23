@@ -452,7 +452,7 @@ describe('markdown stream startup failures', () => {
     ).toBe(false);
   });
 
-  it('shows Codex process and final answer in one card in card mode', async () => {
+  it('keeps the Codex process foldable and sends the final answer separately', async () => {
     const progressCards: unknown[] = [];
     const h = await createHarness({
       messageReply: 'card',
@@ -476,15 +476,16 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
-    await waitFor(() => JSON.stringify(progressCards).includes('FINAL_SENTINEL'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => JSON.stringify(progressCards).includes('progress update'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_SENTINEL'));
+    await waitFor(() => h.channel.sent.some((item) => Boolean((item.content as { image?: unknown }).image)));
 
-    // The answer appears below the folded process in the same card.
+    // The process card never repeats the dedicated final answer.
     const progressJson = JSON.stringify(progressCards);
     expect(progressJson).toContain('progress update');
-    expect(progressJson).toContain('FINAL_SENTINEL');
+    expect(progressJson).not.toContain('FINAL_SENTINEL');
 
-    const image = h.channel.sent[0]?.content as { image?: { source?: Buffer } };
+    const image = h.channel.sent.find((item) => Boolean((item.content as { image?: unknown }).image))?.content as { image?: { source?: Buffer } };
     expect(image.image?.source?.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
   });
 
@@ -507,8 +508,8 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_fallback', 'run'));
-    await waitFor(() => h.channel.sent.length === 1);
-    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('CARD_FALLBACK_ANSWER');
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('CARD_FALLBACK_ANSWER'));
+    expect(JSON.stringify(h.channel.sent)).toContain('检查代码');
   });
 
   it('keeps a card showing Codex reasoning when there is no other progress', async () => {
@@ -530,10 +531,51 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_reasoning_card', '检查'));
-    await waitFor(() => JSON.stringify(progressCards).includes('检查完毕。'));
+    await waitFor(() => JSON.stringify(progressCards).includes('检查当前状态'));
 
     expect(JSON.stringify(progressCards)).toContain('检查当前状态');
-    expect(h.channel.sent).toHaveLength(0);
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('检查完毕。'));
+    expect(JSON.stringify(progressCards)).not.toContain('检查完毕。');
+  });
+
+  it('replays a long interleaved Codex event stream without dropping its tail', async () => {
+    const progressCards: unknown[] = [];
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'thinking', delta: 'THINKING_BEFORE_TOOL' },
+        { type: 'tool_use', id: 'long', name: 'command_execution', input: { command: 'inspect-size' } },
+        { type: 'tool_result', id: 'long', output: `${'diagnostic line\n'.repeat(1800)}TOOL_OUTPUT_TAIL`, isError: false },
+        { type: 'thinking', delta: 'THINKING_AFTER_TOOL' },
+        { type: 'tool_use', id: 'next', name: 'command_execution', input: { command: 'finish-check' } },
+        { type: 'tool_result', id: 'next', output: 'SECOND_TOOL_RESULT', isError: false },
+        { type: 'final_text', content: 'FINAL_RESULT' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card?.producer;
+        await producer?.({ update: vi.fn(async (next) => { progressCards.push(next); }) });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_long_timeline', 'inspect'));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_RESULT'));
+
+    const processCards = [progressCards.at(-1), ...h.channel.sent
+      .map((item) => (item.content as { card?: unknown }).card)
+      .filter((card) => card && JSON.stringify(card).includes('Worked'))];
+    const process = processCards.map((card) => JSON.stringify(card)).join('');
+    expect(processCards.length).toBeGreaterThan(1);
+    expect(process).toContain('THINKING_BEFORE_TOOL');
+    expect(process).toContain('TOOL_OUTPUT_TAIL');
+    expect(process).toContain('THINKING_AFTER_TOOL');
+    expect(process).toContain('SECOND_TOOL_RESULT');
+    expect(process).not.toContain('已省略');
+    expect(JSON.stringify(progressCards)).not.toContain('FINAL_RESULT');
+    expect(JSON.stringify(h.channel.sent.at(-1)?.content)).toContain('FINAL_RESULT');
   });
 });
 
