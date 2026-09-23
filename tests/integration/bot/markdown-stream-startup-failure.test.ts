@@ -1,5 +1,5 @@
 import type { NormalizedMessage } from '@larksuite/channel';
-import { realpath } from 'node:fs/promises';
+import { realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { AgentEvent } from '../../../src/agent/types.js';
@@ -253,6 +253,46 @@ describe('markdown stream startup failures', () => {
     expect(h.channel.sent[1]?.options).toMatchObject({ replyTo: 'om_image' });
   });
 
+  it('sends a local SVG linked in the final answer as a real image', async () => {
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'final_text', content: '已生成：[pelican_bicycle.svg](pelican_bicycle.svg)' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
+    await writeFile(join(h.tmp.workspace, 'pelican_bicycle.svg'),
+      '<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8"><rect width="8" height="8" fill="red"/></svg>');
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_local_svg', '生成一张图片'));
+    await waitFor(() => h.channel.sent.length === 3);
+
+    const source = (h.channel.sent[1]?.content as { image?: { source?: unknown } })?.image?.source;
+    expect(Buffer.isBuffer(source)).toBe(true);
+    expect((source as Buffer).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    expect(h.channel.sent[2]?.content).toMatchObject({
+      file: { fileName: 'pelican_bicycle.svg' },
+    });
+  });
+
+  it('does not upload an image linked outside the workspace', async () => {
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'final_text', content: '[private.png](../private.png)' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
+    await writeFile(join(h.tmp.root, 'private.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_outside_image', 'show image'));
+    await waitFor(() => h.channel.sent.length === 2);
+    expect(h.channel.sent.some((sent) => 'image' in (sent.content as object))).toBe(false);
+    expect(JSON.stringify(h.channel.sent[1]?.content)).toContain('未能作为飞书图片发送');
+  });
+
   it('does not repeat streamed text as the final reply when Codex held nothing back', async () => {
     // Codex only reserves its *last* message as `final_text`; an abnormal turn
     // end (turn.failed, or the process dying before turn.completed) flushes it
@@ -418,8 +458,7 @@ describe('markdown stream startup failures', () => {
       messageReply: 'card',
       events: [
         { type: 'text', delta: 'progress update' },
-        { type: 'generated_image', source: '/tmp/process-image.png' },
-        { type: 'final_text', content: 'FINAL_SENTINEL' },
+        { type: 'final_text', content: 'FINAL_SENTINEL [preview.png](preview.png)' },
         { type: 'done', terminationReason: 'normal' },
       ],
       stream: async (_chatId, input) => {
@@ -433,6 +472,7 @@ describe('markdown stream startup failures', () => {
         });
       },
     });
+    await writeFile(join(h.tmp.workspace, 'preview.png'), Buffer.from('89504e470d0a1a0a', 'hex'));
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
@@ -444,7 +484,8 @@ describe('markdown stream startup failures', () => {
     expect(progressJson).toContain('progress update');
     expect(progressJson).toContain('FINAL_SENTINEL');
 
-    expect(h.channel.sent[0]?.content).toEqual({ image: { source: '/tmp/process-image.png' } });
+    const image = h.channel.sent[0]?.content as { image?: { source?: Buffer } };
+    expect(image.image?.source?.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
   });
 
   it('sends the answer separately if the Codex card stream fails', async () => {

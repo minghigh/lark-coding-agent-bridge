@@ -4,7 +4,7 @@ import type {
   NormalizedMessage,
 } from '@larksuite/channel';
 import { createLarkChannel } from '@larksuite/channel';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
 import {
@@ -67,6 +67,7 @@ import { ProcessPool } from './process-pool';
 import { fetchQuotedContext, fetchTopicContext, type QuotedContext } from './quote';
 import { lookupMessageThreadId } from './thread-id';
 import { addWorkingReaction, removeReaction } from './reaction';
+import { readLinkedImages } from './linked-images';
 import { fetchKnownChats } from './lark-info';
 import type { AppPaths } from '../config/app-paths';
 import {
@@ -1122,6 +1123,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           channel,
           chatId,
           scope,
+          cwd,
           state: finalAnswerOnlyState(finalState),
           replyMode,
           sendOpts,
@@ -1198,8 +1200,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           channel,
           chatId,
           scope,
+          cwd,
           state: cardDelivered && progress.opened() && !progress.abandoned()
-            ? { ...finalState, blocks: [], finalText: undefined }
+            ? { ...finalState, blocks: [] }
             : finalState,
           replyMode: !cardDelivered && finalState.finalText ? 'card' : 'markdown',
           sendOpts,
@@ -1263,6 +1266,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           channel,
           chatId,
           scope,
+          cwd,
           state: finalReplyState(progress, filterForPrefs(latestState)),
           replyMode,
           sendOpts,
@@ -1285,6 +1289,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         channel,
         chatId,
         scope,
+        cwd,
         state:
           controls.profileConfig.agentKind === 'codex'
             ? finalAnswerOnlyState(filterForPrefs(finalState))
@@ -1464,18 +1469,31 @@ async function sendFinalReply(input: {
   channel: LarkChannel;
   chatId: string;
   scope: string;
+  cwd: string;
   state: RunState;
   replyMode: ReturnType<typeof getMessageReplyMode>;
   sendOpts: { replyTo: string; replyInThread?: boolean };
   cardRenderOptions: { signCallback?: (action: string) => string; timeline?: boolean };
 }): Promise<void> {
   const body = renderText(input.state);
-  const images = input.state.generatedImages ?? [];
+  const generated = input.state.generatedImages ?? [];
+  const linked = await readLinkedImages(input.state.finalText ?? body, input.cwd).catch((err) => {
+    log.fail('outbound', err, { scope: input.scope, type: 'linked-image-discovery' });
+    return { images: [], skipped: 1 };
+  });
+  const images: Array<{ source: string | Buffer; originalSvg?: Buffer; fileName?: string }> = [
+    ...generated.map((source) => ({ source: imageSource(source) })),
+    ...linked.images
+      .filter((image) => !generated.some((source) =>
+        source === image.path || (!/^(?:https?:|data:)/i.test(source) && resolve(input.cwd, source) === image.path),
+      ))
+      .map((image) => ({ source: image.preview, originalSvg: image.originalSvg, fileName: image.fileName })),
+  ];
 
   // Nothing deliverable to send (agent produced no text on a clean finish;
   // error/interrupt/timeout keep `body` non-empty via their notices). Skip
   // rather than post an empty card that renders as "(no content)".
-  if (!body.trim() && images.length === 0) {
+  if (!body.trim() && images.length === 0 && linked.skipped === 0) {
     log.info('outbound', 'skip-empty', { scope: input.scope, mode: input.replyMode });
     return;
   }
@@ -1508,11 +1526,11 @@ async function sendFinalReply(input: {
     log.info('outbound', 'sent', outboundLogFields(input, 'text', body, result));
   }
 
-  for (const source of images) {
+  for (const image of images) {
     try {
       const result = await input.channel.send(
         input.chatId,
-        { image: { source: imageSource(source) } },
+        { image: { source: image.source } },
         input.sendOpts,
       );
       requireMessageReceipt(result, 'image');
@@ -1526,6 +1544,33 @@ async function sendFinalReply(input: {
       );
       requireMessageReceipt(result, 'image-error');
     }
+    if (image.originalSvg && image.fileName) {
+      try {
+        const result = await input.channel.send(
+          input.chatId,
+          { file: { source: image.originalSvg, fileName: image.fileName } },
+          input.sendOpts,
+        );
+        requireMessageReceipt(result, 'svg-file');
+        log.info('outbound', 'sent-svg-file', { scope: input.scope, messageId: result.messageId });
+      } catch (err) {
+        log.fail('outbound', err, { scope: input.scope, type: 'svg-file' });
+        const result = await input.channel.send(
+          input.chatId,
+          { markdown: '⚠️ SVG 动画源文件发送失败；静态预览仍可查看。' },
+          input.sendOpts,
+        );
+        requireMessageReceipt(result, 'svg-file-error');
+      }
+    }
+  }
+  if (linked.skipped > 0) {
+    const result = await input.channel.send(
+      input.chatId,
+      { markdown: `⚠️ ${linked.skipped} 张本地图片未能作为飞书图片发送；仅支持当前工作目录内、单张不超过 10MB 的图片（每次最多 4 张）。` },
+      input.sendOpts,
+    );
+    requireMessageReceipt(result, 'linked-image-error');
   }
 }
 
