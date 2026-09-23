@@ -48,6 +48,9 @@ interface FakeLarkChannel {
     };
     im: {
       v1: {
+        image: {
+          create: ReturnType<typeof vi.fn>;
+        };
         message: {
           get: ReturnType<typeof vi.fn>;
         };
@@ -232,11 +235,11 @@ describe('markdown stream startup failures', () => {
     expect(JSON.stringify(h.channel.sent[0]?.content)).not.toContain('collapsible_panel');
   });
 
-  it('uploads generated images as real Feishu image messages', async () => {
+  it('uploads generated images into the final answer card', async () => {
     const h = await createHarness({
       messageReply: 'card',
       events: [
-        { type: 'generated_image', source: '/tmp/generated-pelican.png' },
+        { type: 'generated_image', source: 'data:image/png;base64,iVBORw0KGgo=' },
         { type: 'final_text', content: '图片已生成。' },
         { type: 'done', terminationReason: 'normal' },
       ],
@@ -244,13 +247,12 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_image', 'draw'));
-    await waitFor(() => h.channel.sent.length === 2);
+    await waitFor(() => h.channel.sent.length === 1);
 
     expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('图片已生成。');
-    expect(h.channel.sent[1]?.content).toEqual({
-      image: { source: '/tmp/generated-pelican.png' },
-    });
-    expect(h.channel.sent[1]?.options).toMatchObject({ replyTo: 'om_image' });
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('img_test');
+    expect(h.channel.rawClient.im.v1.image.create).toHaveBeenCalledOnce();
+    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_image' });
   });
 
   it('sends a local SVG linked in the final answer as a real image', async () => {
@@ -266,12 +268,13 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_local_svg', '生成一张图片'));
-    await waitFor(() => h.channel.sent.length === 3);
+    await waitFor(() => h.channel.sent.length === 2);
 
-    const source = (h.channel.sent[1]?.content as { image?: { source?: unknown } })?.image?.source;
+    const source = (h.channel.rawClient.im.v1.image.create.mock.calls[0]?.[0] as { data?: { image?: unknown } })?.data?.image;
     expect(Buffer.isBuffer(source)).toBe(true);
     expect((source as Buffer).subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
-    expect(h.channel.sent[2]?.content).toMatchObject({
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('img_test');
+    expect(h.channel.sent[1]?.content).toMatchObject({
       file: { fileName: 'pelican_bicycle.svg' },
     });
   });
@@ -288,9 +291,9 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_outside_image', 'show image'));
-    await waitFor(() => h.channel.sent.length === 2);
+    await waitFor(() => h.channel.sent.length === 1);
     expect(h.channel.sent.some((sent) => 'image' in (sent.content as object))).toBe(false);
-    expect(JSON.stringify(h.channel.sent[1]?.content)).toContain('未能作为飞书图片发送');
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('未能作为飞书图片发送');
   });
 
   it('does not repeat streamed text as the final reply when Codex held nothing back', async () => {
@@ -478,7 +481,7 @@ describe('markdown stream startup failures', () => {
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
     await waitFor(() => JSON.stringify(progressCards).includes('progress update'));
     await waitFor(() => JSON.stringify(h.channel.sent).includes('FINAL_SENTINEL'));
-    await waitFor(() => h.channel.sent.some((item) => Boolean((item.content as { image?: unknown }).image)));
+    await waitFor(() => JSON.stringify(h.channel.sent).includes('img_test'));
     await waitFor(() => h.channel.rawClient.im.v1.messageReaction.delete.mock.calls.length > 0);
 
     expect(h.channel.rawClient.im.v1.messageReaction.create).toHaveBeenCalledWith({
@@ -494,8 +497,8 @@ describe('markdown stream startup failures', () => {
     expect(progressJson).toContain('progress update');
     expect(progressJson).not.toContain('FINAL_SENTINEL');
 
-    const image = h.channel.sent.find((item) => Boolean((item.content as { image?: unknown }).image))?.content as { image?: { source?: Buffer } };
-    expect(image.image?.source?.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+    const image = (h.channel.rawClient.im.v1.image.create.mock.calls[0]?.[0] as { data?: { image?: Buffer } })?.data?.image;
+    expect(image?.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
   });
 
   it('sends the answer separately if the Codex card stream fails', async () => {
@@ -712,6 +715,9 @@ function createFakeLarkChannel(harnessOptions: {
       },
       im: {
         v1: {
+          image: {
+            create: vi.fn(async () => ({ image_key: 'img_test' })),
+          },
           message: {
             get: vi.fn(async () => ({ data: { items: [] } })),
           },

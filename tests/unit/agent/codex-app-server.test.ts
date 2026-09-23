@@ -328,7 +328,7 @@ describe('Codex app-server event mapping', () => {
       {
         type: 'tool_result',
         id: 'image-1',
-        output: '🖼️ 图片已生成，正在发送到飞书…',
+        output: '🖼️ 图片生成完成',
         isError: false,
       },
       { type: 'generated_image', source: '/tmp/pelican.png' },

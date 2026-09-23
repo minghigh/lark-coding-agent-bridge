@@ -616,7 +616,7 @@ function toolResultForItem(
     case 'imageGeneration':
       output = status === 'failed'
         ? displayValue(item.failure) || '图片生成失败'
-        : '🖼️ 图片已生成，正在发送到飞书…';
+        : '🖼️ 图片生成完成';
       break;
     case 'plan':
       output = item.text;

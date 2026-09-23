@@ -4,6 +4,7 @@ import type {
   NormalizedMessage,
 } from '@larksuite/channel';
 import { createLarkChannel } from '@larksuite/channel';
+import { readFile, stat } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
@@ -86,6 +87,7 @@ const BRIDGE_AGENT_INSTRUCTIONS = [
   '不要 unset LARK_CHANNEL / LARK_CHANNEL_HOME / LARK_CHANNEL_PROFILE / LARKSUITE_CLI_CONFIG_DIR，也不要用 env -u LARK_CHANNEL 绕回本机普通配置。',
   'Codex bridge 默认使用 danger-full-access 对齐 Claude bridge 的 bypassPermissions 行为，因此 lark-cli 应能像用户本机终端一样访问 keychain。',
   '如果提示 lark-channel context detected but not bound，停止当前操作并请用户重启 bridge 或运行 bridge doctor/preflight；不要改用普通 profile，不要自行 bind，也不要直接读取 config.json 里的账号或密钥。',
+  '图片生成成功后由 Bridge 负责上传并与最终回复一起发送；不要为了“内嵌发送”重复调用图片生成工具。',
 ];
 
 // Lark SDK logs API errors at error level even when the caller catches them.
@@ -1480,7 +1482,7 @@ async function recallStreamedMessage(
   }
 }
 
-async function sendFinalReply(input: {
+export async function sendFinalReply(input: {
   channel: LarkChannel;
   chatId: string;
   scope: string;
@@ -1497,7 +1499,7 @@ async function sendFinalReply(input: {
     return { images: [], skipped: 1 };
   });
   const images: Array<{ source: string | Buffer; originalSvg?: Buffer; fileName?: string }> = [
-    ...generated.map((source) => ({ source: imageSource(source) })),
+    ...[...new Set(generated)].map((source) => ({ source })),
     ...linked.images
       .filter((image) => !generated.some((source) =>
         source === image.path || (!/^(?:https?:|data:)/i.test(source) && resolve(input.cwd, source) === image.path),
@@ -1510,6 +1512,87 @@ async function sendFinalReply(input: {
   // rather than post an empty card that renders as "(no content)".
   if (!body.trim() && images.length === 0 && linked.skipped === 0) {
     log.info('outbound', 'skip-empty', { scope: input.scope, mode: input.replyMode });
+    return;
+  }
+
+  if (images.length > 0 || linked.skipped > 0) {
+    const imageKeys: string[] = [];
+    const remoteImages: string[] = [];
+    let failed = 0;
+    for (const image of images) {
+      try {
+        const source = await imageSource(image.source);
+        if (typeof source === 'string') {
+          remoteImages.push(source);
+          continue;
+        }
+        const uploaded = await input.channel.rawClient.im.v1.image.create({
+          data: { image_type: 'message', image: source },
+        });
+        const imageKey = uploaded?.image_key ?? (uploaded as { data?: { image_key?: string } })?.data?.image_key;
+        if (!imageKey) throw new Error('Feishu image upload returned no image_key');
+        imageKeys.push(imageKey);
+      } catch (err) {
+        failed++;
+        log.fail('outbound', err, { scope: input.scope, type: 'image' });
+      }
+    }
+
+    const text = [
+      body.trim(),
+      failed > 0 ? `⚠️ ${failed} 张图片上传到飞书失败，请重试。` : '',
+      linked.skipped > 0
+        ? `⚠️ ${linked.skipped} 张本地图片未能作为飞书图片发送；仅支持当前工作目录内、单张不超过 10MB 的图片（每次最多 4 张）。`
+        : '',
+    ].filter(Boolean).join('\n\n');
+    if (text || imageKeys.length > 0) {
+      const card = renderCard(input.state, { ...input.cardRenderOptions, answerOnlyText: text }) as {
+        body: { elements: object[] };
+      };
+      card.body.elements = [
+        ...(text ? card.body.elements : []),
+        ...imageKeys.map((imageKey) => ({
+          tag: 'img',
+          img_key: imageKey,
+          alt: { tag: 'plain_text', content: '生成的图片' },
+          mode: 'fit_horizontal',
+        })),
+      ];
+      const result = await input.channel.send(input.chatId, { card }, input.sendOpts);
+      requireMessageReceipt(result, 'image-card');
+      log.info('outbound', 'sent', outboundLogFields(input, 'image-card', text, result));
+    }
+
+    for (const source of remoteImages) {
+      try {
+        const result = await input.channel.send(input.chatId, { image: { source } }, input.sendOpts);
+        requireMessageReceipt(result, 'remote-image');
+      } catch (err) {
+        log.fail('outbound', err, { scope: input.scope, type: 'remote-image' });
+        const result = await input.channel.send(input.chatId, { markdown: '⚠️ 远程图片上传到飞书失败，请重试。' }, input.sendOpts);
+        requireMessageReceipt(result, 'remote-image-error');
+      }
+    }
+    for (const image of images) {
+      if (!image.originalSvg || !image.fileName) continue;
+      try {
+        const result = await input.channel.send(
+          input.chatId,
+          { file: { source: image.originalSvg, fileName: image.fileName } },
+          input.sendOpts,
+        );
+        requireMessageReceipt(result, 'svg-file');
+        log.info('outbound', 'sent-svg-file', { scope: input.scope, messageId: result.messageId });
+      } catch (err) {
+        log.fail('outbound', err, { scope: input.scope, type: 'svg-file' });
+        const result = await input.channel.send(
+          input.chatId,
+          { markdown: '⚠️ SVG 动画源文件发送失败；静态预览仍可查看。' },
+          input.sendOpts,
+        );
+        requireMessageReceipt(result, 'svg-file-error');
+      }
+    }
     return;
   }
 
@@ -1541,57 +1624,16 @@ async function sendFinalReply(input: {
     log.info('outbound', 'sent', outboundLogFields(input, 'text', body, result));
   }
 
-  for (const image of images) {
-    try {
-      const result = await input.channel.send(
-        input.chatId,
-        { image: { source: image.source } },
-        input.sendOpts,
-      );
-      requireMessageReceipt(result, 'image');
-      log.info('outbound', 'sent-image', { scope: input.scope, messageId: result.messageId });
-    } catch (err) {
-      log.fail('outbound', err, { scope: input.scope, type: 'image' });
-      const result = await input.channel.send(
-        input.chatId,
-        { markdown: '⚠️ 图片上传到飞书失败，请重试。' },
-        input.sendOpts,
-      );
-      requireMessageReceipt(result, 'image-error');
-    }
-    if (image.originalSvg && image.fileName) {
-      try {
-        const result = await input.channel.send(
-          input.chatId,
-          { file: { source: image.originalSvg, fileName: image.fileName } },
-          input.sendOpts,
-        );
-        requireMessageReceipt(result, 'svg-file');
-        log.info('outbound', 'sent-svg-file', { scope: input.scope, messageId: result.messageId });
-      } catch (err) {
-        log.fail('outbound', err, { scope: input.scope, type: 'svg-file' });
-        const result = await input.channel.send(
-          input.chatId,
-          { markdown: '⚠️ SVG 动画源文件发送失败；静态预览仍可查看。' },
-          input.sendOpts,
-        );
-        requireMessageReceipt(result, 'svg-file-error');
-      }
-    }
-  }
-  if (linked.skipped > 0) {
-    const result = await input.channel.send(
-      input.chatId,
-      { markdown: `⚠️ ${linked.skipped} 张本地图片未能作为飞书图片发送；仅支持当前工作目录内、单张不超过 10MB 的图片（每次最多 4 张）。` },
-      input.sendOpts,
-    );
-    requireMessageReceipt(result, 'linked-image-error');
-  }
 }
 
-function imageSource(source: string): string | Buffer {
+async function imageSource(source: string | Buffer): Promise<string | Buffer> {
+  if (Buffer.isBuffer(source)) return source;
   const match = source.match(/^data:image\/[^;,]+;base64,(.+)$/s);
-  return match?.[1] ? Buffer.from(match[1], 'base64') : source;
+  if (match?.[1]) return Buffer.from(match[1], 'base64');
+  if (/^https?:\/\//i.test(source)) return source;
+  const info = await stat(source);
+  if (!info.isFile() || info.size > 10 * 1024 * 1024) throw new Error('generated image must be a file under 10MB');
+  return readFile(source);
 }
 
 function requireMessageReceipt(result: { messageId?: string }, type: string): void {
