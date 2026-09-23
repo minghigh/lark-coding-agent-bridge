@@ -45,6 +45,8 @@ export function toolBodyMd(tool: ToolEntry): string {
       parts.push(`**Error**\n\`\`\`\n${truncated}\n\`\`\``);
     } else if (tool.name === 'Bash' || tool.name === 'command_execution') {
       parts.push(renderBashOutput(truncated));
+    } else if (tool.name === 'apply_patch' || tool.name === 'image_generation') {
+      parts.push(truncated);
     } else {
       parts.push(`**Output**\n\`\`\`\n${truncated}\n\`\`\``);
     }
@@ -70,6 +72,14 @@ function summarizeInput(name: string, input: unknown): string {
     case 'Bash':
     case 'command_execution':
       return stripShellLauncher(pick('command'));
+    case 'apply_patch': {
+      const files = Array.isArray(rec.files)
+        ? rec.files.filter((value): value is string => typeof value === 'string')
+        : [];
+      if (files.length === 0) return '';
+      const names = files.map((file) => file.split(/[\\/]/).at(-1) ?? file);
+      return names.length <= 2 ? names.join('、') : `${names.slice(0, 2).join('、')} 等 ${names.length} 个文件`;
+    }
     case 'Read':
     case 'Edit':
     case 'Write':

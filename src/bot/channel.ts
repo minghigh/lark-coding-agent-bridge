@@ -1457,16 +1457,17 @@ async function sendFinalReply(input: {
   cardRenderOptions: { signCallback?: (action: string) => string };
 }): Promise<void> {
   const body = renderText(input.state);
+  const images = input.state.generatedImages ?? [];
 
   // Nothing deliverable to send (agent produced no text on a clean finish;
   // error/interrupt/timeout keep `body` non-empty via their notices). Skip
   // rather than post an empty card that renders as "(no content)".
-  if (!body.trim()) {
+  if (!body.trim() && images.length === 0) {
     log.info('outbound', 'skip-empty', { scope: input.scope, mode: input.replyMode });
     return;
   }
 
-  if (input.replyMode === 'card') {
+  if (body.trim() && input.replyMode === 'card') {
     const result = await input.channel.send(
       input.chatId,
       { card: renderCard(input.state, input.cardRenderOptions) },
@@ -1474,16 +1475,14 @@ async function sendFinalReply(input: {
     );
     requireMessageReceipt(result, 'card');
     log.info('outbound', 'sent', outboundLogFields(input, 'card', body, result));
-  } else if (input.replyMode === 'markdown') {
-    if (body.trim()) {
-      const result = await input.channel.send(
-        input.chatId,
-        { markdown: body },
-        input.sendOpts,
-      );
-      requireMessageReceipt(result, 'markdown');
-      log.info('outbound', 'sent', outboundLogFields(input, 'markdown', body, result));
-    }
+  } else if (body.trim() && input.replyMode === 'markdown') {
+    const result = await input.channel.send(
+      input.chatId,
+      { markdown: body },
+      input.sendOpts,
+    );
+    requireMessageReceipt(result, 'markdown');
+    log.info('outbound', 'sent', outboundLogFields(input, 'markdown', body, result));
   } else if (body.trim()) {
     const result = await input.channel.send(
       input.chatId,
@@ -1493,6 +1492,31 @@ async function sendFinalReply(input: {
     requireMessageReceipt(result, 'text');
     log.info('outbound', 'sent', outboundLogFields(input, 'text', body, result));
   }
+
+  for (const source of images) {
+    try {
+      const result = await input.channel.send(
+        input.chatId,
+        { image: { source: imageSource(source) } },
+        input.sendOpts,
+      );
+      requireMessageReceipt(result, 'image');
+      log.info('outbound', 'sent-image', { scope: input.scope, messageId: result.messageId });
+    } catch (err) {
+      log.fail('outbound', err, { scope: input.scope, type: 'image' });
+      const result = await input.channel.send(
+        input.chatId,
+        { markdown: '⚠️ 图片上传到飞书失败，请重试。' },
+        input.sendOpts,
+      );
+      requireMessageReceipt(result, 'image-error');
+    }
+  }
+}
+
+function imageSource(source: string): string | Buffer {
+  const match = source.match(/^data:image\/[^;,]+;base64,(.+)$/s);
+  return match?.[1] ? Buffer.from(match[1], 'base64') : source;
 }
 
 function requireMessageReceipt(result: { messageId?: string }, type: string): void {

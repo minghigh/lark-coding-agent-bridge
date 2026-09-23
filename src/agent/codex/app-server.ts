@@ -338,8 +338,7 @@ export class CodexAppServer {
         return;
       }
       case 'item/plan/delta':
-      case 'item/commandExecution/outputDelta':
-      case 'item/fileChange/outputDelta': {
+      case 'item/commandExecution/outputDelta': {
         const id = stringValue(params.itemId);
         const delta = stringValue(params.delta);
         if (id && delta) {
@@ -400,6 +399,10 @@ export class CodexAppServer {
         if (event) {
           active.run.queue.push(event);
           active.run.tools.delete(event.id);
+        }
+        if (item.type === 'imageGeneration') {
+          const source = generatedImageSource(item);
+          if (source) active.run.queue.push({ type: 'generated_image', source });
         }
         return;
       }
@@ -517,7 +520,7 @@ function toolUseForItem(item: JsonObject): Extract<AgentEvent, { type: 'tool_use
     case 'command_execution':
       return { type: 'tool_use', id, name: 'command_execution', input: { command: item.command } };
     case 'fileChange':
-      return { type: 'tool_use', id, name: 'apply_patch', input: { changes: item.changes } };
+      return { type: 'tool_use', id, name: 'apply_patch', input: { files: fileChangeFiles(item.changes) } };
     case 'mcpToolCall':
       return {
         type: 'tool_use',
@@ -589,7 +592,7 @@ function toolResultForItem(
       output = item.aggregatedOutput ?? item.output ?? streamed.get(id) ?? '';
       break;
     case 'fileChange':
-      output = item.changes;
+      output = summarizeFileChanges(item.changes);
       break;
     case 'mcpToolCall':
       output = objectValue(item.result)?.content ?? item.result ?? error?.message ?? '';
@@ -604,7 +607,9 @@ function toolResultForItem(
       output = item.results ?? item.action ?? 'completed';
       break;
     case 'imageGeneration':
-      output = pick(item, ['status', 'savedPath', 'failure']);
+      output = status === 'failed'
+        ? displayValue(item.failure) || '图片生成失败'
+        : '🖼️ 图片已生成，正在发送到飞书…';
       break;
     case 'plan':
       output = item.text;
@@ -632,6 +637,44 @@ function toolResultForItem(
       item.success === false ||
       (exitCode !== undefined ? exitCode !== 0 : status === 'failed' || status === 'error'),
   };
+}
+
+function fileChangeFiles(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const path = stringValue(objectValue(entry)?.path);
+    return path ? [path] : [];
+  });
+}
+
+function summarizeFileChanges(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return '✅ 文件修改已完成';
+  const lines = value.flatMap((entry) => {
+    const change = objectValue(entry);
+    const path = stringValue(change?.path);
+    if (!path) return [];
+    const kind = (stringValue(change?.kind) ?? '').toLowerCase();
+    const icon = kind.includes('add') || kind.includes('create')
+      ? '➕'
+      : kind.includes('delete') || kind.includes('remove')
+        ? '🗑️'
+        : '✏️';
+    const diff = stringValue(change?.diff) ?? '';
+    const added = diff.split('\n').filter((line) => line.startsWith('+') && !line.startsWith('+++')).length;
+    const removed = diff.split('\n').filter((line) => line.startsWith('-') && !line.startsWith('---')).length;
+    const stats = added || removed ? ` · +${added} / −${removed}` : '';
+    return [`- ${icon} \`${path.replace(/`/g, '\\`')}\`${stats}`];
+  });
+  return lines.length ? `📝 文件变更\n\n${lines.join('\n')}` : '✅ 文件修改已完成';
+}
+
+function generatedImageSource(item: JsonObject): string | undefined {
+  const status = stringValue(item.status);
+  if (item.success === false || item.failure || status === 'failed' || status === 'error') return undefined;
+  const savedPath = stringValue(item.savedPath);
+  if (savedPath) return savedPath;
+  const result = stringValue(item.result);
+  return result && /^(?:https?:\/\/|data:image\/)/.test(result) ? result : undefined;
 }
 
 function displayValue(value: unknown): string {

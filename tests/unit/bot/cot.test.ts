@@ -32,6 +32,15 @@ describe('COT event mapping', () => {
     expect(eventTypes).toContain('TOOL_CALL_RESULT');
     expect(eventTypes).not.toContain('TOOL_CALL_ARGS');
 
+    const understandingStart = client.events.findIndex((event) =>
+      event.event_type === 'STEP_STARTED' && JSON.parse(event.content).stepId === 'step-understand-run-1');
+    const understandingEnd = client.events.findIndex((event) =>
+      event.event_type === 'STEP_FINISHED' && JSON.parse(event.content).stepId === 'step-understand-run-1');
+    const firstProgress = client.events.findIndex((event) => event.event_type === 'TEXT_MESSAGE_START');
+    expect(understandingStart).toBeGreaterThanOrEqual(0);
+    expect(understandingEnd).toBeGreaterThan(understandingStart);
+    expect(firstProgress).toBeGreaterThan(understandingEnd);
+
     const textDeltas = client.events
       .filter((event) => event.event_type === 'TEXT_MESSAGE_CONTENT')
       .map((event) => JSON.parse(event.content).delta);

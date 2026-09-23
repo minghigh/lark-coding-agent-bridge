@@ -19,6 +19,7 @@ export type Terminal = 'running' | 'done' | 'interrupted' | 'error' | 'idle_time
 
 export interface RunState {
   blocks: Block[];
+  generatedImages?: string[];
   finalText?: string;
   reasoning: { content: string; active: boolean };
   footer: FooterStatus;
@@ -114,6 +115,12 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
         ),
       };
     }
+
+    case 'generated_image':
+      return {
+        ...state,
+        generatedImages: [...(state.generatedImages ?? []), evt.source],
+      };
 
     case 'error': {
       const terminal =

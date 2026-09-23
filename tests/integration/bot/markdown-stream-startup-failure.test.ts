@@ -230,6 +230,26 @@ describe('markdown stream startup failures', () => {
     expect(lastMarkdown(h.channel)).toContain('FINAL_ONLY_SENTINEL');
   });
 
+  it('uploads generated images as real Feishu image messages', async () => {
+    const h = await createHarness({
+      events: [
+        { type: 'generated_image', source: '/tmp/generated-pelican.png' },
+        { type: 'final_text', content: '图片已生成。' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_image', 'draw'));
+    await waitFor(() => h.channel.sent.length === 2);
+
+    expect(h.channel.sent[0]?.content).toEqual({ markdown: '图片已生成。' });
+    expect(h.channel.sent[1]?.content).toEqual({
+      image: { source: '/tmp/generated-pelican.png' },
+    });
+    expect(h.channel.sent[1]?.options).toMatchObject({ replyTo: 'om_image' });
+  });
+
   it('does not repeat streamed text as the final reply when Codex held nothing back', async () => {
     // Codex only reserves its *last* message as `final_text`; an abnormal turn
     // end (turn.failed, or the process dying before turn.completed) flushes it

@@ -254,6 +254,85 @@ describe('Codex app-server event mapping', () => {
     ]);
   });
 
+  it('summarizes file changes and exposes generated images for delivery', () => {
+    const { active, push } = testRun();
+    const appServer = new CodexAppServer('ws://unused') as unknown as {
+      runs: Map<string, TestRun>;
+      handleNotification(method: string, params: Record<string, unknown>): void;
+    };
+    appServer.runs.set('thread-1', active);
+
+    const fileChange = {
+      id: 'file-1',
+      type: 'fileChange',
+      status: 'completed',
+      changes: [{
+        path: '/workspace/pelican_bicycle.html',
+        kind: 'add',
+        diff: '--- /dev/null\n+++ b/pelican_bicycle.html\n+<svg>\n+</svg>',
+      }],
+    };
+    appServer.handleNotification('item/started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: fileChange,
+    });
+    appServer.handleNotification('item/fileChange/outputDelta', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'file-1',
+      delta: fileChange.changes[0]?.diff,
+    });
+    appServer.handleNotification('item/completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: fileChange,
+    });
+    appServer.handleNotification('item/started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: { id: 'image-1', type: 'imageGeneration', revisedPrompt: 'a pelican' },
+    });
+    appServer.handleNotification('item/completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        id: 'image-1',
+        type: 'imageGeneration',
+        status: 'completed',
+        savedPath: '/tmp/pelican.png',
+      },
+    });
+
+    expect(push.mock.calls.map(([event]) => event)).toEqual([
+      {
+        type: 'tool_use',
+        id: 'file-1',
+        name: 'apply_patch',
+        input: { files: ['/workspace/pelican_bicycle.html'] },
+      },
+      {
+        type: 'tool_result',
+        id: 'file-1',
+        output: '📝 文件变更\n\n- ➕ `/workspace/pelican_bicycle.html` · +2 / −0',
+        isError: false,
+      },
+      {
+        type: 'tool_use',
+        id: 'image-1',
+        name: 'image_generation',
+        input: { prompt: 'a pelican' },
+      },
+      {
+        type: 'tool_result',
+        id: 'image-1',
+        output: '🖼️ 图片已生成，正在发送到飞书…',
+        isError: false,
+      },
+      { type: 'generated_image', source: '/tmp/pelican.png' },
+    ]);
+  });
+
   it('keeps completed reasoning when the server emitted no reasoning deltas', () => {
     const { active, push } = testRun();
     const appServer = new CodexAppServer('ws://unused') as unknown as {

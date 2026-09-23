@@ -17,6 +17,8 @@ const COT_EVENTS_PER_REQUEST = 10;
 // start() — which runs before any agent event is drained and before the
 // plain-reply fallback — to undici's ~300s default.
 const COT_REQUEST_TIMEOUT_MS = 15_000;
+const UNDERSTANDING_STEP_NAME = '🧭 理解任务';
+const PROGRESS_STEP_NAME = '✨ 进度与说明';
 
 export class CotClient {
   private readonly baseUrl: string;
@@ -190,7 +192,7 @@ export class CotPublisher {
     });
     this.enqueue('STEP_STARTED', {
       stepId: `step-understand-${this.runId}`,
-      stepName: '理解用户问题',
+      stepName: UNDERSTANDING_STEP_NAME,
     });
   }
 
@@ -267,6 +269,7 @@ export async function consumeCotEvents(
   opts: { detail: CotMessagesMode },
 ): Promise<void> {
   let reasoningOpen = false;
+  let understandingOpen = true;
   let textStepOpen = false;
   let textMessageOpen = false;
   let textMessageIndex = 0;
@@ -281,6 +284,7 @@ export async function consumeCotEvents(
     for await (const evt of events) {
       if (evt.type === 'system' || evt.type === 'usage') continue;
       if (evt.type === 'thinking') {
+        closeUnderstandingIfNeeded();
         closeTextIfNeeded();
         if (!reasoningOpen) {
           reasoningOpen = true;
@@ -296,6 +300,7 @@ export async function consumeCotEvents(
         continue;
       }
       if (evt.type === 'tool_use') {
+        closeUnderstandingIfNeeded();
         closeReasoningIfNeeded();
         closeTextIfNeeded();
         const toolCallId = evt.id;
@@ -364,12 +369,13 @@ export async function consumeCotEvents(
         continue;
       }
       if (evt.type === 'text') {
+        closeUnderstandingIfNeeded();
         closeReasoningIfNeeded();
         if (!textStepOpen) {
           textStepOpen = true;
           publisher.enqueue('STEP_STARTED', {
             stepId: finalStepId,
-            stepName: 'Codex 进度',
+            stepName: PROGRESS_STEP_NAME,
           });
         }
         if (!textMessageOpen) {
@@ -384,12 +390,13 @@ export async function consumeCotEvents(
       }
       if (evt.type === 'final_text') continue;
       if (evt.type === 'done' || evt.type === 'error') {
+        closeUnderstandingIfNeeded();
         closeReasoningIfNeeded();
         closeTextIfNeeded();
         if (textStepOpen) {
           publisher.enqueue('STEP_FINISHED', {
             stepId: finalStepId,
-            stepName: 'Codex 进度',
+            stepName: PROGRESS_STEP_NAME,
           });
         }
         if (evt.type === 'error') {
@@ -408,6 +415,7 @@ export async function consumeCotEvents(
       }
     }
     closeReasoningIfNeeded();
+    closeUnderstandingIfNeeded();
     closeTextIfNeeded();
     await publisher.finish('done');
   } catch (err) {
@@ -420,6 +428,15 @@ export async function consumeCotEvents(
     reasoningOpen = false;
     publisher.enqueue('REASONING_MESSAGE_END', { messageId: reasoningMessageId });
     publisher.enqueue('REASONING_END', { messageId: reasoningMessageId });
+  }
+
+  function closeUnderstandingIfNeeded(): void {
+    if (!understandingOpen) return;
+    understandingOpen = false;
+    publisher.enqueue('STEP_FINISHED', {
+      stepId: `step-understand-${publisher.runId}`,
+      stepName: UNDERSTANDING_STEP_NAME,
+    });
   }
 
   function closeTextIfNeeded(): void {

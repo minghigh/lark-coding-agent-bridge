@@ -11,6 +11,7 @@ export type AgentEvent =
   | { type: 'tool_use'; id: string; name: string; input: unknown }
   | { type: 'tool_output'; id: string; delta: string }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
+  | { type: 'generated_image'; source: string }
   | {
       type: 'usage';
       inputTokens?: number;
