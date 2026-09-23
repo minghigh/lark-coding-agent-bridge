@@ -77,6 +77,42 @@ describe('run card renderer snapshots', () => {
     expect(JSON.stringify(panels)).not.toContain('text_size');
   });
 
+  it('renders Codex progress in event order inside one foldable timeline', () => {
+    const events: AgentEvent[] = [
+      { type: 'thinking', delta: '先检查代码。' },
+      { type: 'tool_use', id: 'read', name: 'Read', input: { file_path: 'src/card.ts' } },
+      { type: 'tool_result', id: 'read', output: 'file contents', isError: false },
+      { type: 'text', delta: '发现字号过小。' },
+      { type: 'tool_use', id: 'test', name: 'command_execution', input: { command: 'vitest run' } },
+      { type: 'tool_result', id: 'test', output: '705 tests passed', isError: false },
+      { type: 'thinking', delta: '最后确认结果。' },
+      { type: 'final_text', content: '最终答案只单独发送。' },
+    ];
+    const running = renderCard({ ...stateFrom(events), elapsedMs: 42_000 }, {
+      agentName: 'Codex', timeline: true,
+    }) as { body: { elements: Array<Record<string, unknown>> } };
+    const panel = running.body.elements[0] as {
+      expanded: boolean;
+      header: { title: { content: string } };
+      elements: Array<{ content: string }>;
+    };
+    const content = panel.elements[0]?.content ?? '';
+    expect(panel.expanded).toBe(true);
+    expect(panel.header.title.content).toContain('工作过程 · 进行中 · 42 秒');
+    expect(content.indexOf('先检查代码')).toBeLessThan(content.indexOf('读取文件'));
+    expect(content.indexOf('读取文件')).toBeLessThan(content.indexOf('发现字号过小'));
+    expect(content.indexOf('发现字号过小')).toBeLessThan(content.indexOf('`vitest run`'));
+    expect(content.indexOf('`vitest run`')).toBeLessThan(content.indexOf('最后确认结果'));
+    expect(content).toContain('705 tests passed');
+    expect(content).not.toContain('最终答案只单独发送');
+
+    const done = renderCard({ ...stateFrom([...events, { type: 'done', terminationReason: 'normal' }]), elapsedMs: 42_000 }, {
+      agentName: 'Codex', timeline: true,
+    }) as { body: { elements: Array<{ expanded: boolean }> } };
+    expect(done.body.elements).toHaveLength(1);
+    expect(done.body.elements[0]?.expanded).toBe(false);
+  });
+
   it('renders done, error, interrupted, and idle-timeout terminal states', () => {
     expectCard(stateFrom([{ type: 'done', terminationReason: 'normal' }])).toMatchSnapshot();
     expectCard(stateFrom([{ type: 'error', message: 'process failed', terminationReason: 'failed' }])).toMatchSnapshot();

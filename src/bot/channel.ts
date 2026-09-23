@@ -1059,6 +1059,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   };
   const cardRenderOptions = {
     agentName: controls.profileConfig.agentKind === 'codex' ? 'Codex' : 'Claude',
+    timeline: controls.profileConfig.agentKind === 'codex',
     ...(callbackAuth ? {
       signCallback: (action: string) =>
         callbackAuth.sign({
@@ -1670,6 +1671,7 @@ async function processAgentStream(
       const prevTerminal = state.terminal;
       const prevFooter = state.footer;
       state = reduce(state, evt);
+      state = { ...state, elapsedMs: Date.now() - runStart };
       if (state.footer !== prevFooter || state.terminal !== prevTerminal) {
         log.info('card', 'transition', { footer: state.footer, terminal: state.terminal });
       }
@@ -1696,6 +1698,7 @@ async function processAgentStream(
       state = finalizeIfRunning(state);
     }
   }
+  state = { ...state, elapsedMs: Date.now() - runStart };
   log.info('card', 'final', { scope, terminal: state.terminal, interrupted: handle.interrupted });
   reportMetric('run_e2e_ms', Date.now() - runStart, { terminal: state.terminal });
   await flush(state);

@@ -38,6 +38,7 @@ export function renderText(state: RunState): string {
 }
 
 function renderBlock(block: Block): string {
+  if (block.kind === 'reasoning') return '';
   if (block.kind === 'text') {
     return block.content.trim();
   }

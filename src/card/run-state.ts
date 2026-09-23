@@ -12,6 +12,7 @@ export interface ToolEntry {
 
 export type Block =
   | { kind: 'text'; content: string; streaming: boolean }
+  | { kind: 'reasoning'; content: string }
   | { kind: 'tool'; tool: ToolEntry };
 
 export type FooterStatus = 'thinking' | 'tool_running' | 'streaming' | null;
@@ -25,6 +26,7 @@ export interface RunState {
   footer: FooterStatus;
   terminal: Terminal;
   errorMsg?: string;
+  elapsedMs?: number;
   /** Set when terminal === 'idle_timeout' — how long claude was idle before
    * the watchdog gave up (so the message can say "N 分钟无响应"). */
   idleTimeoutMinutes?: number;
@@ -68,8 +70,13 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       return { ...state, finalText: evt.content };
 
     case 'thinking': {
+      const blocks = closeStreamingText(state.blocks);
+      const last = blocks[blocks.length - 1];
       return {
         ...state,
+        blocks: last?.kind === 'reasoning'
+          ? [...blocks.slice(0, -1), { ...last, content: last.content + evt.delta }]
+          : [...blocks, { kind: 'reasoning', content: evt.delta }],
         reasoning: { content: state.reasoning.content + evt.delta, active: true },
         footer: 'thinking',
       };

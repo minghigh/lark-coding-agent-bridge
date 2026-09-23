@@ -18,9 +18,16 @@ type Group = ToolGroup | TextGroup;
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
   agentName?: string;
+  timeline?: boolean;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
+  if (options.timeline) {
+    return cardEnvelope(state, [
+      timelinePanel(state),
+      ...(state.terminal === 'running' ? [stopButton(options)] : []),
+    ]);
+  }
   const toolCount = state.blocks.filter((block) => block.kind === 'tool').length;
   const status = state.terminal === 'running' ? '处理中' : state.terminal === 'done' ? '已完成' : '已结束';
   const elements: object[] = [
@@ -55,8 +62,11 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     elements.push(stopButton(options));
   }
 
-  // Mask raw emails across every text field so the Feishu tenant audit doesn't
-  // reject the (streamed) card with a 400 EMAIL_ADDRESS — see mask-email.ts.
+  return cardEnvelope(state, elements);
+}
+
+function cardEnvelope(state: RunState, elements: object[]): object {
+  // Mask raw emails so the Feishu tenant audit accepts streamed cards.
   return deepMaskEmails({
     schema: '2.0',
     config: {
@@ -70,6 +80,7 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
 function* groupBlocks(blocks: Block[]): Generator<Group> {
   let toolBuf: ToolEntry[] = [];
   for (const b of blocks) {
+    if (b.kind === 'reasoning') continue;
     if (b.kind === 'tool') {
       toolBuf.push(b.tool);
     } else {
@@ -81,6 +92,72 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
     }
   }
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
+}
+
+function timelinePanel(state: RunState): object {
+  const status = state.terminal === 'running' ? '进行中' :
+    state.terminal === 'done' ? '已完成' :
+      state.terminal === 'error' ? '出错' : '已结束';
+  const elapsed = state.elapsedMs === undefined ? '' : ` · ${formatElapsed(state.elapsedMs)}`;
+  const entries = state.blocks.flatMap((block) => {
+    if (block.kind === 'tool') return [timelineTool(block.tool)];
+    const content = block.content.trim();
+    return content ? [truncate(content, 1400)] : [];
+  });
+  if (state.terminal === 'error' && state.errorMsg) entries.push(`⚠️ ${state.errorMsg}`);
+  if (state.terminal === 'interrupted') entries.push('⏹ 已中断');
+  if (state.terminal === 'idle_timeout') entries.push('⏱ 无响应，已终止');
+  const recent: string[] = [];
+  let length = 0;
+  for (const entry of entries.slice(-24).reverse()) {
+    if (length + entry.length > 14000) break;
+    recent.unshift(entry);
+    length += entry.length;
+  }
+  const omitted = entries.length - recent.length;
+  const content = [
+    ...(omitted ? [`_较早的 ${omitted} 项过程已省略_`] : []),
+    ...recent,
+  ].join('\n\n') || '_正在处理…_';
+  return {
+    tag: 'collapsible_panel',
+    expanded: state.terminal === 'running',
+    header: panelHeader(`🧠 **工作过程 · ${status}${elapsed}**`),
+    border: { color: state.terminal === 'error' ? 'red' : 'grey', corner_radius: '5px' },
+    vertical_spacing: '8px',
+    padding: '12px 12px 12px 12px',
+    elements: [markdown(content)],
+  };
+}
+
+function timelineTool(tool: ToolEntry): string {
+  const icon = tool.status === 'error' ? '❌' : tool.status === 'running' ? '⏳' :
+    tool.name === 'command_execution' || tool.name === 'Bash' ? '⌘' :
+      tool.name === 'apply_patch' || tool.name === 'Edit' || tool.name === 'Write' ? '✏️' :
+        tool.name === 'Read' ? '📖' : '✅';
+  const terminal = tool.name === 'command_execution' || tool.name === 'Bash';
+  const name = ({ Bash: '终端', Read: '读取文件', Edit: '修改文件', Write: '写入文件',
+    Grep: '搜索内容', Glob: '查找文件' } as Record<string, string>)[tool.name];
+  const header = toolHeaderText(tool)
+    .replace(/^(?:✅|❌|⏳)\s*/, `${icon} `)
+    .replace(`**${tool.name}**`, `**${name ?? tool.name}**`);
+  const divider = header.indexOf(' — ');
+  const styledHeader = terminal && divider >= 0
+    ? `${header.slice(0, divider)} · \`${header.slice(divider + 3).replace(/`/g, '\\`')}\``
+    : header;
+  const output = tool.output?.trim();
+  if (!output || (!terminal && tool.name !== 'apply_patch' && tool.status !== 'error')) return styledHeader;
+  const preview = truncate(output, 700);
+  if (terminal) {
+    return `${styledHeader}\n\`\`\`text\n${preview.replace(/\`\`\`/g, '\`\`\\\`')}\n\`\`\`${output.length > 700 ? '\n_输出较长，已省略后续内容_' : ''}`;
+  }
+  return `${styledHeader}\n${preview}${output.length > 700 ? '\n_输出较长，已省略后续内容_' : ''}`;
+}
+
+function formatElapsed(ms: number): string {
+  const seconds = Math.max(1, Math.floor(ms / 1000));
+  const minutes = Math.floor(seconds / 60);
+  return minutes ? `${minutes} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
 }
 
 function renderToolGroup(tools: ToolEntry[]): object[] {
