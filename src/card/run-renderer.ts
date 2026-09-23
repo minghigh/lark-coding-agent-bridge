@@ -1,9 +1,9 @@
 import { deepMaskEmails } from './mask-email';
-import type { Block, FooterStatus, RunState, ToolEntry } from './run-state';
+import type { Block, RunState, ToolEntry } from './run-state';
 import { toolBodyMd, toolHeaderText } from './tool-render';
 
 const REASONING_MAX = 1500;
-const COLLAPSE_TOOL_THRESHOLD = 3;
+const MAX_VISIBLE_TOOLS = 12;
 
 interface ToolGroup {
   kind: 'tools';
@@ -17,10 +17,16 @@ type Group = ToolGroup | TextGroup;
 
 export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
+  agentName?: string;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
-  const elements: object[] = [];
+  const toolCount = state.blocks.filter((block) => block.kind === 'tool').length;
+  const status = state.terminal === 'running' ? '处理中' : state.terminal === 'done' ? '已完成' : '已结束';
+  const elements: object[] = [
+    markdown(`**${options.agentName ?? '任务'} · ${status}**${toolCount ? `  ·  ${toolCount} 次工具调用` : ''}`),
+    { tag: 'hr' },
+  ];
 
   if (state.reasoning.content) {
     elements.push(reasoningPanel(state.reasoning.content, state.reasoning.active));
@@ -32,7 +38,7 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
         elements.push(markdown(group.content));
       }
     } else {
-      elements.push(...renderToolGroup(group.tools, state.terminal !== 'running'));
+      elements.push(...renderToolGroup(group.tools));
     }
   }
 
@@ -43,12 +49,9 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
     elements.push(noteMd(`_⏱ ${mins} 分钟无响应,已自动终止_`));
   } else if (state.terminal === 'error' && state.errorMsg) {
     elements.push(noteMd(`⚠️ agent 失败：${state.errorMsg}`));
-  } else if (state.terminal === 'done' && elements.length === 0) {
-    elements.push(noteMd('_（未返回内容）_'));
   }
 
   if (state.terminal === 'running') {
-    if (state.footer) elements.push(footerStatus(state.footer));
     elements.push(stopButton(options));
   }
 
@@ -80,21 +83,14 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
   if (toolBuf.length > 0) yield { kind: 'tools', tools: toolBuf };
 }
 
-function renderToolGroup(tools: ToolEntry[], finalized: boolean): object[] {
+function renderToolGroup(tools: ToolEntry[]): object[] {
   if (tools.length === 0) return [];
-  if (tools.length < COLLAPSE_TOOL_THRESHOLD) {
-    return tools.map((t) => toolPanel(t, false));
-  }
-  if (finalized) {
-    return [collapsedToolSummary(tools, true)];
-  }
-  // Running: collapse prior tools, keep latest visible.
-  const prior = tools.slice(0, -1);
-  const latest = tools[tools.length - 1];
-  const out: object[] = [];
-  if (prior.length > 0) out.push(collapsedToolSummary(prior, false));
-  if (latest) out.push(toolPanel(latest, true));
-  return out;
+  const earlier = tools.slice(0, -MAX_VISIBLE_TOOLS);
+  const recent = tools.slice(-MAX_VISIBLE_TOOLS);
+  return [
+    ...(earlier.length ? [collapsedToolSummary(earlier)] : []),
+    ...recent.map((tool) => toolPanel(tool, tool.status !== 'done')),
+  ];
 }
 
 function reasoningPanel(content: string, active: boolean): object {
@@ -117,21 +113,13 @@ function toolPanel(tool: ToolEntry, expanded: boolean): object {
 }
 
 /**
- * Render N tool calls as a single collapsed panel. **Body content is dropped**
- * — only the per-tool header line (icon + name + short summary) is kept.
+ * Summarize older calls once the card would otherwise become too large.
  *
- * Why no bodies: with full input/output panels nested, the serialized JSON
- * can easily exceed Feishu's per-element size limit (~30KB), causing 400
- * errors that abort the entire card stream. Tool details are still in the
- * file log; users who really need them can `/doctor` to inspect.
- *
- * The latest-running tool, when applicable, is rendered separately via
- * `toolPanel(latest, true)` so live observation isn't sacrificed.
+ * Keeping older bodies would eventually exceed Feishu's card size limit.
  */
-function collapsedToolSummary(tools: ToolEntry[], finalized: boolean): object {
-  const suffix = finalized ? '（已结束）' : '';
-  const title = `☕ **${tools.length} 个工具调用${suffix}**`;
-  const headerList = tools.map((t) => `- ${toolHeaderText(t)}`).join('\n');
+function collapsedToolSummary(tools: ToolEntry[]): object {
+  const title = `📂 **较早的 ${tools.length} 次工具调用 · 仅摘要**`;
+  const headerList = truncate(tools.map((t) => `- ${toolHeaderText(t)}`).join('\n'), 2500);
   return {
     tag: 'collapsible_panel',
     expanded: false,
@@ -139,7 +127,7 @@ function collapsedToolSummary(tools: ToolEntry[], finalized: boolean): object {
     border: { color: 'blue', corner_radius: '5px' },
     vertical_spacing: '8px',
     padding: '8px 8px 8px 8px',
-    elements: [{ tag: 'markdown', content: headerList, text_size: 'notation' }],
+    elements: [{ tag: 'markdown', content: headerList }],
   };
 }
 
@@ -158,7 +146,7 @@ function collapsiblePanel(opts: PanelOpts): object {
     border: { color: opts.border, corner_radius: '5px' },
     vertical_spacing: '8px',
     padding: '8px 8px 8px 8px',
-    elements: [{ tag: 'markdown', content: opts.body, text_size: 'notation' }],
+    elements: [{ tag: 'markdown', content: opts.body }],
   };
 }
 
@@ -177,7 +165,7 @@ function markdown(content: string): object {
 }
 
 function noteMd(content: string): object {
-  return { tag: 'markdown', content, text_size: 'notation' };
+  return markdown(content);
 }
 
 function stopButton(options: RunCardRenderOptions): object {
@@ -192,16 +180,6 @@ function stopButton(options: RunCardRenderOptions): object {
     type: 'danger',
     behaviors: [{ type: 'callback', value }],
   };
-}
-
-function footerStatus(status: Exclude<FooterStatus, null>): object {
-  const text =
-    status === 'thinking'
-      ? '🧠 正在思考'
-      : status === 'tool_running'
-        ? '🧰 正在调用工具'
-        : '✍️ 正在输出';
-  return noteMd(text);
 }
 
 function summaryText(state: RunState): string {

@@ -1057,20 +1057,21 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (getShowToolCalls(controls.cfg)) return state;
     return { ...state, blocks: state.blocks.filter((b) => b.kind !== 'tool') };
   };
-  const cardRenderOptions = callbackAuth
-    ? {
-        signCallback: (action: string) =>
-          callbackAuth.sign({
-            runId: execution.runId,
-            scope,
-            chatId,
-            operatorOpenId: firstMsg.senderId,
-            action,
-            policyFingerprint: flow.policy.policyFingerprint,
-            ttlMs: 24 * 60 * 60 * 1000,
-          }),
-      }
-    : {};
+  const cardRenderOptions = {
+    agentName: controls.profileConfig.agentKind === 'codex' ? 'Codex' : 'Claude',
+    ...(callbackAuth ? {
+      signCallback: (action: string) =>
+        callbackAuth.sign({
+          runId: execution.runId,
+          scope,
+          chatId,
+          operatorOpenId: firstMsg.senderId,
+          action,
+          policyFingerprint: flow.policy.policyFingerprint,
+          ttlMs: 24 * 60 * 60 * 1000,
+        }),
+    } : {}),
+  };
 
   // For non-card modes Claude's output doesn't surface visually until either
   // a first streamed token (markdown mode) or the whole run ends (text mode).
@@ -1162,7 +1163,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async (state) => {
           latestState = state;
-          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
+          if (shouldOpenProgressStream(filterForPrefs(state), 'card')) progress.ensureOpen();
           if (cardCtrl) {
             await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
           }
@@ -1195,7 +1196,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           chatId,
           scope,
           state: finalReplyState(progress, filterForPrefs(latestState)),
-          replyMode,
+          replyMode: 'markdown',
           sendOpts,
           cardRenderOptions,
         });
@@ -1303,6 +1304,7 @@ interface LazyProgressStream {
    * the render loop exactly as if the stream had been created up front.
    */
   readonly settled: Promise<unknown>;
+  readonly mode: 'card' | 'markdown';
   opened(): boolean;
   ensureOpen(): void;
   /**
@@ -1338,6 +1340,7 @@ function createLazyProgressStream(
   });
   return {
     settled,
+    mode,
     opened: () => stream !== undefined,
     ensureOpen: () => {
       if (stream) return;
@@ -1363,13 +1366,18 @@ function createLazyProgressStream(
  * (`sendFinalReply`, or the stream fallback) instead of a card that would be
  * created only to be finished a moment later.
  *
- * `state` must already be `filterForPrefs`-projected, and emptiness is measured
- * with `renderText` in both reply modes so it matches the rule
- * `recallIfEmptyStreamedReply` applies: a stream we open is one that survives.
+ * `state` must already be `filterForPrefs`-projected. Cards can also show
+ * reasoning on its own; markdown cannot. The same content rule is used by
+ * `recallIfEmptyStreamedReply` so a useful stream is not recalled.
  */
-function shouldOpenProgressStream(state: RunState): boolean {
+function shouldOpenProgressStream(state: RunState, mode: 'card' | 'markdown' = 'markdown'): boolean {
   if (state.terminal !== 'running') return false;
-  return renderText({ ...state, footer: null }).trim() !== '';
+  return hasProgressContent(state, mode);
+}
+
+function hasProgressContent(state: RunState, mode: 'card' | 'markdown'): boolean {
+  return renderText({ ...state, footer: null }).trim() !== '' ||
+    (mode === 'card' && state.reasoning.content.trim() !== '');
 }
 
 /**
@@ -1423,7 +1431,7 @@ async function recallIfEmptyStreamedReply(
     );
     return;
   }
-  if (renderText(finalState).trim() !== '') return;
+  if (hasProgressContent(finalState, progress.mode)) return;
   const result = await progress.settled.catch(() => undefined);
   await recallStreamedMessage(channel, result, scope);
 }

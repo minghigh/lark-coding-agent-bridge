@@ -50,6 +50,7 @@ export function toolBodyMd(tool: ToolEntry): string {
     } else {
       parts.push(`**Output**\n\`\`\`\n${truncated}\n\`\`\``);
     }
+    if (tool.output.length > OUTPUT_MAX) parts.push('_输出较长，卡片仅展示前 1200 字_');
   } else if (tool.status === 'running') {
     parts.push('_运行中…_');
   }
@@ -113,11 +114,15 @@ function renderInput(tool: ToolEntry): string {
   switch (tool.name) {
     case 'Bash': {
       const cmd = str('command');
-      return cmd ? `**Command**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\`` : '';
+      return cmd && cmd.length > HEADER_SUMMARY_MAX
+        ? `**命令**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\``
+        : '';
     }
     case 'command_execution': {
       const cmd = str('command');
-      return cmd ? `**命令**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\`` : '';
+      return cmd && stripShellLauncher(cmd).length > HEADER_SUMMARY_MAX
+        ? `**命令**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\``
+        : '';
     }
     case 'Read':
     case 'Edit':
@@ -143,7 +148,7 @@ function renderInput(tool: ToolEntry): string {
 
 function renderBashOutput(out: string): string {
   // Some agents wrap stdout/stderr in xml-like tags; keep simple and just dump.
-  return `**Output**\n\`\`\`\n${out}\n\`\`\``;
+  return `**输出**\n\`\`\`text\n${out.replace(/\`\`\`/g, '\`\`\\\`')}\n\`\`\``;
 }
 
 function shortenPath(p: string): string {

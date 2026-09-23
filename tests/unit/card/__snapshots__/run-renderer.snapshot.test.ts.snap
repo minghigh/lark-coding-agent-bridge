@@ -1,20 +1,28 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`run card renderer snapshots > collapses consecutive tools while preserving the latest running tool 1`] = `
+exports[`run card renderer snapshots > keeps recent tool details readable and folds completed calls 1`] = `
 {
   "body": {
     "elements": [
       {
+        "content": "**任务 · 处理中**  ·  3 次工具调用",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
-          "color": "blue",
+          "color": "grey",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "- ✅ **Bash** — pwd
-- ✅ **Read** — /repo/a.ts",
+            "content": "**输出**
+\`\`\`text
+/repo
+\`\`\`",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": false,
@@ -27,7 +35,42 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "☕ **2 个工具调用**",
+            "content": "✅ **Bash** — pwd",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "grey",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "**File** \`/repo/a.ts\`
+
+**Output**
+\`\`\`
+a
+\`\`\`",
+            "tag": "markdown",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "✅ **Read** — /repo/a.ts",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -47,7 +90,6 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
 
 _运行中…_",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": true,
@@ -68,11 +110,6 @@ _运行中…_",
         "padding": "8px 8px 8px 8px",
         "tag": "collapsible_panel",
         "vertical_spacing": "8px",
-      },
-      {
-        "content": "🧰 正在调用工具",
-        "tag": "markdown",
-        "text_size": "notation",
       },
       {
         "behaviors": [
@@ -102,22 +139,29 @@ _运行中…_",
 }
 `;
 
-exports[`run card renderer snapshots > collapses consecutive tools while preserving the latest running tool 2`] = `
+exports[`run card renderer snapshots > keeps recent tool details readable and folds completed calls 2`] = `
 {
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已完成**  ·  3 次工具调用",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
-          "color": "blue",
+          "color": "grey",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "- ✅ **Bash** — pwd
-- ✅ **Read** — /repo/a.ts
-- ✅ **Edit** — /repo/a.ts",
+            "content": "**输出**
+\`\`\`text
+/repo
+\`\`\`",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": false,
@@ -130,7 +174,77 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
           "icon_expanded_angle": -180,
           "icon_position": "follow_text",
           "title": {
-            "content": "☕ **3 个工具调用（已结束）**",
+            "content": "✅ **Bash** — pwd",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "grey",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "**File** \`/repo/a.ts\`
+
+**Output**
+\`\`\`
+a
+\`\`\`",
+            "tag": "markdown",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "✅ **Read** — /repo/a.ts",
+            "tag": "markdown",
+          },
+          "vertical_align": "center",
+        },
+        "padding": "8px 8px 8px 8px",
+        "tag": "collapsible_panel",
+        "vertical_spacing": "8px",
+      },
+      {
+        "border": {
+          "color": "grey",
+          "corner_radius": "5px",
+        },
+        "elements": [
+          {
+            "content": "**File** \`/repo/a.ts\`
+
+**Output**
+\`\`\`
+ok
+\`\`\`",
+            "tag": "markdown",
+          },
+        ],
+        "expanded": false,
+        "header": {
+          "icon": {
+            "size": "16px 16px",
+            "tag": "standard_icon",
+            "token": "down-small-ccm_outlined",
+          },
+          "icon_expanded_angle": -180,
+          "icon_position": "follow_text",
+          "title": {
+            "content": "✅ **Edit** — /repo/a.ts",
             "tag": "markdown",
           },
           "vertical_align": "center",
@@ -156,6 +270,13 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
   "body": {
     "elements": [
       {
+        "content": "**任务 · 处理中**",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
           "color": "grey",
           "corner_radius": "5px",
@@ -164,7 +285,6 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
           {
             "content": "checking options",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": true,
@@ -185,11 +305,6 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
         "padding": "8px 8px 8px 8px",
         "tag": "collapsible_panel",
         "vertical_spacing": "8px",
-      },
-      {
-        "content": "🧠 正在思考",
-        "tag": "markdown",
-        "text_size": "notation",
       },
       {
         "behaviors": [
@@ -224,6 +339,13 @@ exports[`run card renderer snapshots > renders active and completed thinking 2`]
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已完成**",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
           "color": "grey",
           "corner_radius": "5px",
@@ -232,7 +354,6 @@ exports[`run card renderer snapshots > renders active and completed thinking 2`]
           {
             "content": "checking options",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": false,
@@ -275,9 +396,11 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
   "body": {
     "elements": [
       {
-        "content": "_（未返回内容）_",
+        "content": "**任务 · 已完成**",
         "tag": "markdown",
-        "text_size": "notation",
+      },
+      {
+        "tag": "hr",
       },
     ],
   },
@@ -296,9 +419,15 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已结束**",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "content": "⚠️ agent 失败：process failed",
         "tag": "markdown",
-        "text_size": "notation",
       },
     ],
   },
@@ -317,13 +446,19 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已结束**",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "content": "partial",
         "tag": "markdown",
       },
       {
         "content": "_⏹ 已被中断_",
         "tag": "markdown",
-        "text_size": "notation",
       },
     ],
   },
@@ -342,13 +477,19 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已结束**",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "content": "partial",
         "tag": "markdown",
       },
       {
         "content": "_⏱ 15 分钟无响应,已自动终止_",
         "tag": "markdown",
-        "text_size": "notation",
       },
     ],
   },
@@ -367,9 +508,11 @@ exports[`run card renderer snapshots > renders initial running state 1`] = `
   "body": {
     "elements": [
       {
-        "content": "🧠 正在思考",
+        "content": "**任务 · 处理中**",
         "tag": "markdown",
-        "text_size": "notation",
+      },
+      {
+        "tag": "hr",
       },
       {
         "behaviors": [
@@ -436,23 +579,24 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
   "body": {
     "elements": [
       {
+        "content": "**任务 · 处理中**  ·  1 次工具调用",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
           "color": "grey",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "**Command**
-\`\`\`bash
-pwd
-\`\`\`
-
-_运行中…_",
+            "content": "_运行中…_",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
-        "expanded": false,
+        "expanded": true,
         "header": {
           "icon": {
             "size": "16px 16px",
@@ -470,11 +614,6 @@ _运行中…_",
         "padding": "8px 8px 8px 8px",
         "tag": "collapsible_panel",
         "vertical_spacing": "8px",
-      },
-      {
-        "content": "🧰 正在调用工具",
-        "tag": "markdown",
-        "text_size": "notation",
       },
       {
         "behaviors": [
@@ -509,23 +648,24 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已完成**  ·  1 次工具调用",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
           "color": "grey",
           "corner_radius": "5px",
         },
         "elements": [
           {
-            "content": "**Command**
-\`\`\`bash
-pwd
-\`\`\`
-
-**Output**
-\`\`\`
+            "content": "**输出**
+\`\`\`text
 /repo
 \`\`\`",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
         "expanded": false,
@@ -564,6 +704,13 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
   "body": {
     "elements": [
       {
+        "content": "**任务 · 已完成**  ·  1 次工具调用",
+        "tag": "markdown",
+      },
+      {
+        "tag": "hr",
+      },
+      {
         "border": {
           "color": "red",
           "corner_radius": "5px",
@@ -577,10 +724,9 @@ exports[`run card renderer snapshots > renders tool running, done, and error sta
 ENOENT
 \`\`\`",
             "tag": "markdown",
-            "text_size": "notation",
           },
         ],
-        "expanded": false,
+        "expanded": true,
         "header": {
           "icon": {
             "size": "16px 16px",

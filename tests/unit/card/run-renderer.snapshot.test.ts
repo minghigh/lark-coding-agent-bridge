@@ -43,7 +43,7 @@ describe('run card renderer snapshots', () => {
     ])).toMatchSnapshot();
   });
 
-  it('collapses consecutive tools while preserving the latest running tool', () => {
+  it('keeps recent tool details readable and folds completed calls', () => {
     expectCard(stateFrom([
       { type: 'tool_use', id: 'tool-1', name: 'Bash', input: { command: 'pwd' } },
       { type: 'tool_result', id: 'tool-1', output: '/repo', isError: false },
@@ -61,6 +61,20 @@ describe('run card renderer snapshots', () => {
       { type: 'tool_result', id: 'tool-3', output: 'ok', isError: false },
       { type: 'done', terminationReason: 'normal' },
     ])).toMatchSnapshot();
+
+    const card = renderCard(stateFrom([
+      { type: 'tool_use', id: 'tool-1', name: 'command_execution', input: { command: 'nvidia-smi' } },
+      { type: 'tool_result', id: 'tool-1', output: 'GPU idle', isError: false },
+      { type: 'tool_use', id: 'tool-2', name: 'Read', input: { file_path: '/repo/a.ts' } },
+      { type: 'tool_result', id: 'tool-2', output: 'file content', isError: false },
+      { type: 'tool_use', id: 'tool-3', name: 'Edit', input: { file_path: '/repo/a.ts' } },
+    ]), { agentName: 'Codex' }) as { body: { elements: Array<Record<string, unknown>> } };
+    const panels = card.body.elements.filter((element) => element.tag === 'collapsible_panel');
+    expect(card.body.elements[0]?.content).toContain('Codex · 处理中');
+    expect(panels).toHaveLength(3);
+    expect(panels.map((panel) => panel.expanded)).toEqual([false, false, true]);
+    expect(JSON.stringify(panels)).toContain('GPU idle');
+    expect(JSON.stringify(panels)).not.toContain('text_size');
   });
 
   it('renders done, error, interrupted, and idle-timeout terminal states', () => {
