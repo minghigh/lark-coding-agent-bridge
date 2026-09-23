@@ -162,6 +162,7 @@ describe('Codex app-server event mapping', () => {
       cwd: '/workspace',
       prompt: 'line one\nline two',
       images: ['/cache/photo.png'],
+      reasoningEffort: 'xhigh',
       developerInstructions: 'bridge rules',
     });
 
@@ -173,6 +174,7 @@ describe('Codex app-server event mapping', () => {
       { type: 'text', text: 'line one\nline two', text_elements: [] },
       { type: 'localImage', path: '/cache/photo.png' },
     ]);
+    expect(calls.find((call) => call.method === 'turn/start')?.params.effort).toBe('xhigh');
   });
 
   it('times out unanswered app-server requests', async () => {

@@ -214,6 +214,7 @@ export async function savePreferencesConfig(
 export async function saveModelConfig(
   state: MutableProfileState,
   model: string | undefined,
+  reasoningEffort?: string,
 ): Promise<void> {
   await withConfigFileLock(state.configPath, async () => {
     const root = await loadRootConfig(state.configPath);
@@ -221,6 +222,8 @@ export async function saveModelConfig(
       const preferences = { ...(state.cfg.preferences ?? {}) };
       if (model) preferences.model = model;
       else delete preferences.model;
+      if (reasoningEffort) preferences.reasoningEffort = reasoningEffort;
+      else delete preferences.reasoningEffort;
       state.cfg.preferences = preferences;
       await saveConfig(state.cfg, state.configPath);
       return;
@@ -231,6 +234,8 @@ export async function saveModelConfig(
     const preferences = { ...(profile.preferences ?? {}) };
     if (model) preferences.model = model;
     else delete preferences.model;
+    if (reasoningEffort) preferences.reasoningEffort = reasoningEffort;
+    else delete preferences.reasoningEffort;
     root.profiles[state.profile] = { ...profile, preferences };
     await saveRootConfig(root, state.configPath);
     state.profileConfig = root.profiles[state.profile]!;

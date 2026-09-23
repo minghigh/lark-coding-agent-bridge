@@ -1,7 +1,7 @@
 import { realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claudeCapability } from '../../../src/agent/capability';
+import { claudeCapability, codexCapability } from '../../../src/agent/capability';
 import { ActiveRuns } from '../../../src/bot/active-runs';
 import { startRunFlow } from '../../../src/bot/run-flow';
 import { ProcessPool } from '../../../src/bot/process-pool';
@@ -100,9 +100,34 @@ describe('IM run flow', () => {
     expect(h.agent.runOptions[0]?.cwd).toBe(workspaceRealpath);
   });
 
+  it('passes the selected Codex model and reasoning effort to the run', async () => {
+    const h = await createHarness({ defaultWorkspace: true, agentKind: 'codex' });
+    h.profileConfig.preferences.model = 'gpt-6-luna';
+    h.profileConfig.preferences.reasoningEffort = 'xhigh';
+
+    const result = await startRunFlow({
+      scopeId: 'chat-1',
+      scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello',
+      attachments: [],
+      access: { ok: true, reason: 'allowed-user' },
+      capability: codexCapability(h.profileConfig),
+      profileConfig: h.profileConfig,
+      sessions: h.sessions,
+      workspaces: h.workspaces,
+      executor: h.executor,
+      now: 1000,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(h.agent.runOptions[0]).toMatchObject({
+      model: 'gpt-6-luna', reasoningEffort: 'xhigh',
+    });
+  });
+
 });
 
-async function createHarness(options: { defaultWorkspace?: boolean } = {}): Promise<{
+async function createHarness(options: { defaultWorkspace?: boolean; agentKind?: 'claude' | 'codex' } = {}): Promise<{
   tmp: TmpProfile;
   agent: FakeAgentAdapter;
   executor: RunExecutor;
@@ -122,7 +147,8 @@ async function createHarness(options: { defaultWorkspace?: boolean } = {}): Prom
     now: () => 1000,
   });
   const profileConfig = createDefaultProfileConfig({
-    agentKind: 'claude',
+    agentKind: options.agentKind ?? 'claude',
+    ...(options.agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
     accounts: {
       app: {
         id: 'cli_test',

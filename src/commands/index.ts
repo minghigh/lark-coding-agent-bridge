@@ -869,8 +869,13 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
       .map((model) => ({ id: model.value, label: model.label }));
   }
 
-  const requested = args.trim();
+  const [requested = '', effort, extra] = args.trim().split(/\s+/);
+  if (extra || (effort && agentKind !== 'codex')) {
+    await reply(ctx, '用法：`/model <model-id> [effort]`；发送 `/model` 查看可用模型和档位。');
+    return;
+  }
   const configured = ctx.controls.cfg.preferences?.model;
+  const configuredEffort = ctx.controls.cfg.preferences?.reasoningEffort;
   const defaultModel = models.find((model) => model.isDefault);
   const currentId = configured || defaultModel?.id || DEFAULT_MODEL;
   const current = models.find((model) => model.id === currentId);
@@ -888,10 +893,11 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
       [
         '### 🤖 模型',
         `当前选择：**${current?.label ?? modelLabel(agentKind, configured)}** · \`${currentId}\``,
+        ...(agentKind === 'codex' ? [`推理档位：\`${configuredEffort ?? '跟随 Codex 设置'}\``] : []),
         '',
         ...lines,
         '',
-        '切换：`/model <model-id>`；恢复 Codex 默认：`/model default`。',
+        '切换：`/model <model-id> [effort]`；恢复默认：`/model default`。',
       ].join('\n'),
     );
     return;
@@ -904,11 +910,19 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, `❌ 当前账号没有可用模型 \`${requested}\`。发送 \`/model\` 查看列表。`);
     return;
   }
+  if (effort && (requested === DEFAULT_MODEL || !next.reasoningEfforts?.includes(effort))) {
+    const available = next.reasoningEfforts?.join(' / ') || '请发送 /model 查看';
+    await reply(ctx, `❌ \`${next.id}\` 不支持推理档位 \`${effort}\`。可选：${available}。`);
+    return;
+  }
   if (!canRunAdminCommand(ctx.controls.profileConfig, ctx.controls, ctx.msg.senderId).ok) {
     await reply(ctx, '❌ 切换模型仅管理员可用。');
     return;
   }
-  if (next.id === currentId && (requested !== DEFAULT_MODEL || !configured)) {
+  if (
+    next.id === currentId && effort === configuredEffort &&
+    (requested !== DEFAULT_MODEL || !configured)
+  ) {
     await reply(ctx, `当前已经是 **${next.label}** · \`${next.id}\`。`);
     return;
   }
@@ -917,15 +931,17 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     await configOps.saveModelConfig(
       ctx.controls,
       requested === DEFAULT_MODEL ? undefined : next.id,
+      effort,
     );
   } catch (err) {
     log.warn('command', 'model-save-failed', { err: String(err) });
     await reply(ctx, '❌ 模型切换保存失败，原配置未改变。');
     return;
   }
+  const effortSuffix = effort ? ` · \`${effort}\`` : '';
   await reply(
     ctx,
-    `✅ 已切换到 **${next.label}** · \`${next.id}\`，从下一条任务开始生效。`,
+    `✅ 已切换到 **${next.label}** · \`${next.id}\`${effortSuffix}，从下一条任务开始生效。`,
   );
 }
 

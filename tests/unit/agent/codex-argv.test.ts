@@ -126,6 +126,13 @@ describe('Codex argv contract', () => {
     expect(buildCodexArgs({ cwd: '/repo', sandbox: 'read-only' })).not.toContain('--model');
   });
 
+  it('passes the chosen reasoning effort to Codex', () => {
+    const args = buildCodexArgs({
+      cwd: '/repo', sandbox: 'read-only', model: 'gpt-6-luna', reasoningEffort: 'xhigh',
+    });
+    expect(args).toContain('model_reasoning_effort="xhigh"');
+  });
+
   it('can explicitly ignore the user config when profile isolation asks for it', () => {
     expect(
       buildCodexArgs({

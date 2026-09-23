@@ -244,6 +244,7 @@ describe('Bridge command contracts', () => {
       listModels: vi.fn(async () => [
         { id: 'gpt-6-astra', label: 'GPT-6-Astra', isDefault: true, reasoningEfforts: ['high'] },
         { id: 'gpt-6-sol', label: 'GPT-6-Sol', reasoningEfforts: ['high', 'xhigh'] },
+        { id: 'gpt-6-luna', label: 'GPT-6-Luna', reasoningEfforts: ['medium', 'xhigh'] },
       ]),
     });
 
@@ -259,9 +260,28 @@ describe('Bridge command contracts', () => {
     let root = await loadRootConfig(h.controls.configPath);
     expect(root?.profiles.claude?.preferences.model).toBe('gpt-6-sol');
 
+    await expect(h.run('/model gpt-6-luna xhigh')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('从下一条任务开始生效');
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.claude?.preferences.model).toBe('gpt-6-luna');
+    expect(root?.profiles.claude?.preferences.reasoningEffort).toBe('xhigh');
+
+    await expect(h.run('/model gpt-6-luna high')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('不支持推理档位');
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.claude?.preferences.reasoningEffort).toBe('xhigh');
+
+    await expect(h.run('/model gpt-6-luna medium')).resolves.toBe(true);
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.claude?.preferences.reasoningEffort).toBe('medium');
+
+    await expect(h.run('/model')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('推理档位：`medium`');
+
     await expect(h.run('/model default')).resolves.toBe(true);
     root = await loadRootConfig(h.controls.configPath);
     expect(root?.profiles.claude?.preferences).not.toHaveProperty('model');
+    expect(root?.profiles.claude?.preferences).not.toHaveProperty('reasoningEffort');
   });
 
   it('shows workspace paths in group-visible /status replies', async () => {

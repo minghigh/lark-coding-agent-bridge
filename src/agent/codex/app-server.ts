@@ -32,7 +32,6 @@ interface AgentRunState {
   reasoningItems: Set<string>;
 }
 
-const DEFAULT_REASONING_EFFORT = 'xhigh';
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 
 type AppServerRunOptions = AgentRunOptions & { developerInstructions?: string };
@@ -40,7 +39,7 @@ type AppServerRunOptions = AgentRunOptions & { developerInstructions?: string };
 /** JSON-RPC client for one local Codex app-server WebSocket endpoint. */
 export class CodexAppServer {
   private readonly url: string;
-  private readonly reasoningEffort: string;
+  private readonly reasoningEffort: string | undefined;
   private readonly requestTimeoutMs: number;
   private socket: WebSocket | undefined;
   private connecting: Promise<void> | undefined;
@@ -50,7 +49,7 @@ export class CodexAppServer {
 
   constructor(
     url: string,
-    reasoningEffort = DEFAULT_REASONING_EFFORT,
+    reasoningEffort?: string,
     requestTimeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
   ) {
     this.url = url;
@@ -170,11 +169,12 @@ export class CodexAppServer {
         hasThread: Boolean(opts.threadId),
         images: opts.images?.length ?? 0,
       });
+      const effort = opts.reasoningEffort ?? this.reasoningEffort;
       const turn = await this.request('turn/start', {
         threadId,
         cwd: opts.cwd,
         ...(opts.model ? { model: opts.model } : {}),
-        effort: this.reasoningEffort,
+        ...(effort ? { effort } : {}),
         approvalPolicy: 'never',
         input,
       });
