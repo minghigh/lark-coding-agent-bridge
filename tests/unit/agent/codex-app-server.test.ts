@@ -41,6 +41,38 @@ function testRun(
 }
 
 describe('Codex app-server event mapping', () => {
+  it('lists the models exposed by the active Codex account', async () => {
+    const appServer = new CodexAppServer('ws://unused') as unknown as {
+      ensureConnected(): Promise<void>;
+      request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
+      listModels(): Promise<unknown[]>;
+    };
+    appServer.ensureConnected = vi.fn().mockResolvedValue(undefined);
+    appServer.request = vi.fn().mockResolvedValue({
+      data: [{
+        id: 'gpt-6-sol',
+        model: 'gpt-6-sol',
+        displayName: 'GPT-6-Sol',
+        isDefault: true,
+        supportedReasoningEfforts: [
+          { reasoningEffort: 'high' },
+          { reasoningEffort: 'xhigh' },
+        ],
+      }],
+    });
+
+    await expect(appServer.listModels()).resolves.toEqual([{
+      id: 'gpt-6-sol',
+      label: 'GPT-6-Sol',
+      isDefault: true,
+      reasoningEfforts: ['high', 'xhigh'],
+    }]);
+    expect(appServer.request).toHaveBeenCalledWith('model/list', {
+      limit: 100,
+      includeHidden: false,
+    });
+  });
+
   it('preserves the completed final_answer after its streamed delta', () => {
     const { active, push } = testRun();
     active.run.agentMessages.add('message-1');

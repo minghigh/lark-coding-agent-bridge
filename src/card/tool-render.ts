@@ -15,7 +15,23 @@ const BODY_TOTAL_MAX = 2500;
 export function toolHeaderText(tool: ToolEntry): string {
   const icon = tool.status === 'done' ? '✅' : tool.status === 'error' ? '❌' : '⏳';
   const summary = summarizeInput(tool.name, tool.input);
-  return summary ? `${icon} **${tool.name}** — ${summary}` : `${icon} **${tool.name}**`;
+  const name = toolDisplayName(tool.name);
+  return summary ? `${icon} **${name}** — ${summary}` : `${icon} **${name}**`;
+}
+
+export function toolDisplayName(name: string): string {
+  const labels: Record<string, string> = {
+    command_execution: '终端',
+    apply_patch: '修改文件',
+    web_search: '网页搜索',
+    view_image: '查看图片',
+    image_generation: '生成图片',
+    update_plan: '更新计划',
+    wait: '等待',
+    subagent: '子智能体',
+    context_compaction: '整理上下文',
+  };
+  return labels[name] ?? name;
 }
 
 export function toolBodyMd(tool: ToolEntry): string {
@@ -27,7 +43,7 @@ export function toolBodyMd(tool: ToolEntry): string {
     const truncated = truncate(tool.output, OUTPUT_MAX);
     if (tool.status === 'error') {
       parts.push(`**Error**\n\`\`\`\n${truncated}\n\`\`\``);
-    } else if (tool.name === 'Bash') {
+    } else if (tool.name === 'Bash' || tool.name === 'command_execution') {
       parts.push(renderBashOutput(truncated));
     } else {
       parts.push(`**Output**\n\`\`\`\n${truncated}\n\`\`\``);
@@ -52,7 +68,8 @@ function summarizeInput(name: string, input: unknown): string {
   };
   switch (name) {
     case 'Bash':
-      return pick('command');
+    case 'command_execution':
+      return stripShellLauncher(pick('command'));
     case 'Read':
     case 'Edit':
     case 'Write':
@@ -86,7 +103,11 @@ function renderInput(tool: ToolEntry): string {
   switch (tool.name) {
     case 'Bash': {
       const cmd = str('command');
-      return cmd ? `**Command**\n\`\`\`bash\n${truncate(cmd, BODY_FIELD_MAX)}\n\`\`\`` : '';
+      return cmd ? `**Command**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\`` : '';
+    }
+    case 'command_execution': {
+      const cmd = str('command');
+      return cmd ? `**命令**\n\`\`\`bash\n${truncate(stripShellLauncher(cmd), BODY_FIELD_MAX)}\n\`\`\`` : '';
     }
     case 'Read':
     case 'Edit':
@@ -117,6 +138,14 @@ function renderBashOutput(out: string): string {
 
 function shortenPath(p: string): string {
   return p;
+}
+
+function stripShellLauncher(command: string): string {
+  const stripped = command.replace(/^(?:\/usr\/bin\/|\/bin\/)?(?:zsh|bash|sh)\s+-lc\s+/, '').trim();
+  const quote = stripped[0];
+  return quote && (quote === '"' || quote === "'") && stripped.endsWith(quote)
+    ? stripped.slice(1, -1)
+    : stripped;
 }
 
 function truncate(s: string, max: number): string {

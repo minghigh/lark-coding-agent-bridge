@@ -80,6 +80,10 @@ export class CodexAdapter implements AgentAdapter {
     });
   }
 
+  async listModels() {
+    return this.appServer?.listModels() ?? [];
+  }
+
   async prepareRun(): Promise<void> {
     const availability = await this.checkAvailability();
     if (!availability.ok) {

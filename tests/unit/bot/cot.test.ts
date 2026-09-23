@@ -38,7 +38,7 @@ describe('COT event mapping', () => {
     expect(textDeltas).toEqual(['我会先生成图片。', '图片已经生成。']);
 
     const toolResult = client.events.find((event) => event.event_type === 'TOOL_CALL_RESULT');
-    expect(JSON.parse(toolResult?.content ?? '{}').content).toContain('command_execution');
+    expect(JSON.parse(toolResult?.content ?? '{}').content).toContain('终端');
     expect(client.completed).toEqual(['done']);
   });
 
@@ -62,7 +62,7 @@ describe('COT event mapping', () => {
 
     expect(client.events.map((event) => event.event_type)).toContain('TOOL_CALL_ARGS');
     const result = client.events.find((event) => event.event_type === 'TOOL_CALL_RESULT');
-    expect(JSON.parse(result?.content ?? '{}').content).toBe('workspace');
+    expect(JSON.parse(result?.content ?? '{}').content).toBe('```text\nworkspace\n```');
   });
 
   it('chunks detailed tool args and output without losing content', async () => {
@@ -91,7 +91,9 @@ describe('COT event mapping', () => {
       .join('');
     const result = client.events
       .filter((event) => event.event_type === 'TOOL_CALL_RESULT')
-      .map((event) => JSON.parse(event.content).content)
+      .map((event) => String(JSON.parse(event.content).content)
+        .replace(/^```text\n/, '')
+        .replace(/\n```$/, ''))
       .join('');
     expect(args).toBe(JSON.stringify({ command }));
     expect(result).toBe(output);
@@ -116,11 +118,11 @@ describe('COT event mapping', () => {
     });
   });
 
-  it('uses the legacy tool header format for brief COT titles', () => {
-    expect(cotBriefToolTitle('command_execution', { command: 'echo hello' }, 'done'))
-      .toContain('✅ command_execution');
-    expect(cotBriefToolTitle('command_execution', { command: 'echo hello' }, 'done'))
-      .toContain('echo hello');
+  it('uses friendly, compact tool titles', () => {
+    expect(cotBriefToolTitle(
+      'command_execution',
+      { command: '/usr/bin/zsh -lc nvidia-smi' },
+    )).toBe('终端 — nvidia-smi');
   });
 
   it('creates the CoT bubble once, addressed to the origin message in a topic', async () => {

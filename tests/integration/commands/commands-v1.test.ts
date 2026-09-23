@@ -238,6 +238,32 @@ describe('Bridge command contracts', () => {
     expect(status).toContain(jsonStringFragment(await realpath(h.tmp.workspace)));
   });
 
+  it('lists live Codex models and switches the profile model', async () => {
+    const h = await createHarness('codex');
+    Object.assign(h.agent, {
+      listModels: vi.fn(async () => [
+        { id: 'gpt-6-astra', label: 'GPT-6-Astra', isDefault: true, reasoningEfforts: ['high'] },
+        { id: 'gpt-6-sol', label: 'GPT-6-Sol', reasoningEfforts: ['high', 'xhigh'] },
+      ]),
+    });
+
+    await expect(h.run('/model', { senderId: 'ou-not-admin' })).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('GPT-6-Astra');
+    expect(lastMarkdown(h.channel)).toContain('← 当前');
+
+    await expect(h.run('/model gpt-6-sol', { senderId: 'ou-not-admin' })).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
+
+    await expect(h.run('/model gpt-6-sol')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('从下一条任务开始生效');
+    let root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.claude?.preferences.model).toBe('gpt-6-sol');
+
+    await expect(h.run('/model default')).resolves.toBe(true);
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.claude?.preferences).not.toHaveProperty('model');
+  });
+
   it('shows workspace paths in group-visible /status replies', async () => {
     const h = await createHarness();
 
@@ -313,7 +339,7 @@ describe('Bridge command contracts', () => {
   });
 });
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(agentKind: ProfileConfig['agentKind'] = 'claude'): Promise<Harness> {
   const tmp = await createTmpProfile('commands-v1-');
   const channel = createFakeChannel();
   const sessions = new SessionStore(join(tmp.profile, 'sessions.json'));
@@ -321,7 +347,7 @@ async function createHarness(): Promise<Harness> {
   const activeRuns = new ActiveRuns();
   const agent = createFakeAgent();
   const workspaceRealpath = await realpath(tmp.workspace);
-  const profileConfig = appConfig(workspaceRealpath);
+  const profileConfig = appConfig(workspaceRealpath, agentKind);
   const configPath = join(tmp.root, 'config.json');
   await saveRootConfig(createRootConfig('claude', profileConfig), configPath);
   const controls = {
@@ -368,13 +394,17 @@ async function createHarness(): Promise<Harness> {
   return { tmp, channel, sessions, workspaces, activeRuns, agent, controls, run };
 }
 
-function appConfig(defaultWorkspace: string): ProfileConfig {
+function appConfig(
+  defaultWorkspace: string,
+  agentKind: ProfileConfig['agentKind'] = 'claude',
+): ProfileConfig {
   const config = createDefaultProfileConfig({
-    agentKind: 'claude',
+    agentKind,
     accounts: { app: { id: 'app-id', secret: 'secret', tenant: 'feishu' } },
     access: { admins: ['ou-admin'] },
     sandbox: { defaultMode: 'read-only', maxMode: 'workspace-write' },
     preferences: { maxConcurrentRuns: 2 },
+    ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
   });
   config.workspaces.default = defaultWorkspace;
   return config;

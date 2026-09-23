@@ -38,10 +38,13 @@ const CLAUDE_MODELS: ModelOption[] = [
 /** Codex CLI models. Forwarded to `codex exec --model`. */
 const CODEX_MODELS: ModelOption[] = [
   { value: DEFAULT_MODEL, label: '跟随默认（不指定）' },
-  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna（xhigh）' },
-  { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
-  { value: 'gpt-5', label: 'GPT-5' },
-  { value: 'o3', label: 'o3' },
+  { value: 'gpt-6-astra', label: 'GPT-6 Astra' },
+  { value: 'gpt-6-sol', label: 'GPT-6 Sol' },
+  { value: 'gpt-6-luna', label: 'GPT-6 Luna' },
+  { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol' },
+  { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
+  { value: 'gpt-5.5', label: 'GPT-5.5' },
 ];
 
 /** The model picker options for a profile's agent kind. */

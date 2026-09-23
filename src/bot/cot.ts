@@ -327,7 +327,7 @@ export async function consumeCotEvents(
             messageId: `tool-output-${evt.id}-${index}`,
             toolCallId: evt.id,
             role: 'tool',
-            content,
+            content: formatCotToolOutput(toolBrief.get(evt.id)?.name, content),
           });
         }
         continue;
@@ -340,7 +340,11 @@ export async function consumeCotEvents(
           ? evt.output.slice(streamed.length)
           : evt.output;
         const contents = detailed
-          ? splitCot(result)
+          ? result
+            ? splitCot(result)
+            : streamed
+              ? []
+              : ['_工具调用完成，无输出_']
           : [brief
               ? cotBriefToolTitle(brief.name, brief.input, evt.isError ? 'error' : 'done')
               : '工具调用已完成'];
@@ -349,7 +353,9 @@ export async function consumeCotEvents(
             messageId: `tool-result-${evt.id}-${index + 1}`,
             toolCallId: evt.id,
             role: 'tool',
-            content,
+            content: detailed
+              ? formatCotToolOutput(brief?.name, content)
+              : content,
           });
         }
         toolBrief.delete(evt.id);
@@ -363,7 +369,7 @@ export async function consumeCotEvents(
           textStepOpen = true;
           publisher.enqueue('STEP_STARTED', {
             stepId: finalStepId,
-            stepName: '输出过程',
+            stepName: 'Codex 进度',
           });
         }
         if (!textMessageOpen) {
@@ -383,7 +389,7 @@ export async function consumeCotEvents(
         if (textStepOpen) {
           publisher.enqueue('STEP_FINISHED', {
             stepId: finalStepId,
-            stepName: '输出过程',
+            stepName: 'Codex 进度',
           });
         }
         if (evt.type === 'error') {
@@ -429,7 +435,13 @@ export function cotBriefToolTitle(
   input: unknown,
   status: 'running' | 'done' | 'error' = 'running',
 ): string {
-  return toolHeaderText({ id: 'cot-tool', name, input, status }).replace(/\*\*/g, '');
+  const title = toolHeaderText({ id: 'cot-tool', name, input, status }).replace(/\*\*/g, '');
+  return status === 'running' ? title.replace(/^⏳\s*/, '') : title;
+}
+
+function formatCotToolOutput(name: string | undefined, content: string): string {
+  if (name !== 'command_execution' && name !== 'Bash') return content;
+  return `\`\`\`text\n${content.replace(/\`\`\`/g, '\`\`\\\`')}\n\`\`\``;
 }
 
 function cotToolIcon(name: string): string {

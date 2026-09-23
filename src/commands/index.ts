@@ -4,8 +4,8 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
-import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
-import type { AgentAdapter } from '../agent/types';
+import { DEFAULT_MODEL, modelLabel, normalizeModelSelection, supportedModels } from '../agent/models';
+import type { AgentAdapter, AgentModel } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
 import {
   accountCurrentCard,
@@ -172,6 +172,7 @@ const handlers: Record<string, Handler> = {
   '/ws': handleWs,
   '/resume': handleResume,
   '/status': handleStatus,
+  '/model': handleModel,
   '/help': handleHelp,
   '/account': handleAccount,
   '/config': handleConfig,
@@ -852,6 +853,80 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     chatMode: ctx.chatMode,
   });
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
+}
+
+async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  const agentKind = ctx.controls.profileConfig.agentKind;
+  let models: AgentModel[] = [];
+  try {
+    models = await ctx.agent.listModels?.() ?? [];
+  } catch (err) {
+    log.warn('command', 'model-list-failed', { err: String(err) });
+  }
+  if (models.length === 0) {
+    models = supportedModels(agentKind)
+      .filter((model) => model.value !== DEFAULT_MODEL)
+      .map((model) => ({ id: model.value, label: model.label }));
+  }
+
+  const requested = args.trim();
+  const configured = ctx.controls.cfg.preferences?.model;
+  const defaultModel = models.find((model) => model.isDefault);
+  const currentId = configured || defaultModel?.id || DEFAULT_MODEL;
+  const current = models.find((model) => model.id === currentId);
+
+  if (!requested || requested === 'list' || requested === 'current') {
+    const lines = models.map((model) => {
+      const marker = model.id === currentId ? ' ← 当前' : model.isDefault ? ' · 默认' : '';
+      const efforts = model.reasoningEfforts?.length
+        ? ` · ${model.reasoningEfforts.join('/')}`
+        : '';
+      return `- **${model.label}** · \`${model.id}\`${efforts}${marker}`;
+    });
+    await reply(
+      ctx,
+      [
+        '### 🤖 模型',
+        `当前选择：**${current?.label ?? modelLabel(agentKind, configured)}** · \`${currentId}\``,
+        '',
+        ...lines,
+        '',
+        '切换：`/model <model-id>`；恢复 Codex 默认：`/model default`。',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  const next = requested === DEFAULT_MODEL
+    ? (defaultModel ?? { id: DEFAULT_MODEL, label: '跟随默认' })
+    : models.find((model) => model.id === requested);
+  if (!next) {
+    await reply(ctx, `❌ 当前账号没有可用模型 \`${requested}\`。发送 \`/model\` 查看列表。`);
+    return;
+  }
+  if (!canRunAdminCommand(ctx.controls.profileConfig, ctx.controls, ctx.msg.senderId).ok) {
+    await reply(ctx, '❌ 切换模型仅管理员可用。');
+    return;
+  }
+  if (next.id === currentId && (requested !== DEFAULT_MODEL || !configured)) {
+    await reply(ctx, `当前已经是 **${next.label}** · \`${next.id}\`。`);
+    return;
+  }
+
+  try {
+    await configOps.saveModelConfig(
+      ctx.controls,
+      requested === DEFAULT_MODEL ? undefined : next.id,
+    );
+  } catch (err) {
+    log.warn('command', 'model-save-failed', { err: String(err) });
+    await reply(ctx, '❌ 模型切换保存失败，原配置未改变。');
+    return;
+  }
+  await reply(
+    ctx,
+    `✅ 已切换到 **${next.label}** · \`${next.id}\`，从下一条任务开始生效。`,
+  );
 }
 
 function formatOwnerState(ctx: CommandContext): string {

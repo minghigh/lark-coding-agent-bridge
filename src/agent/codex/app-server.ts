@@ -1,7 +1,7 @@
 import WebSocket from 'ws';
 import { log } from '../../core/logger';
 import type { SandboxMode } from '../../config/profile-schema';
-import type { AgentEvent, AgentRun, AgentRunOptions } from '../types';
+import type { AgentEvent, AgentModel, AgentRun, AgentRunOptions } from '../types';
 
 type JsonObject = Record<string, unknown>;
 
@@ -56,6 +56,29 @@ export class CodexAppServer {
     this.url = url;
     this.reasoningEffort = reasoningEffort;
     this.requestTimeoutMs = requestTimeoutMs;
+  }
+
+  async listModels(): Promise<AgentModel[]> {
+    await this.ensureConnected();
+    const result = await this.request('model/list', { limit: 100, includeHidden: false });
+    const data = Array.isArray(result.data) ? result.data : [];
+    return data.flatMap((value) => {
+      const model = objectValue(value);
+      const id = stringValue(model?.model) ?? stringValue(model?.id);
+      if (!model || !id) return [];
+      const efforts = Array.isArray(model.supportedReasoningEfforts)
+        ? model.supportedReasoningEfforts.flatMap((entry) => {
+            const effort = stringValue(objectValue(entry)?.reasoningEffort);
+            return effort ? [effort] : [];
+          })
+        : [];
+      return [{
+        id,
+        label: stringValue(model.displayName) ?? id,
+        isDefault: model.isDefault === true,
+        reasoningEfforts: efforts,
+      }];
+    });
   }
 
   run(opts: AppServerRunOptions): AgentRun {

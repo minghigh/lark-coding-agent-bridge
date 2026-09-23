@@ -77,11 +77,19 @@ export interface AgentBotIdentity {
   name?: string;
 }
 
+export interface AgentModel {
+  id: string;
+  label: string;
+  isDefault?: boolean;
+  reasoningEfforts?: readonly string[];
+}
+
 export interface AgentAdapter {
   readonly id: string;
   readonly displayName: string;
   isAvailable(): Promise<boolean>;
   checkAvailability?(): Promise<AgentAvailability>;
+  listModels?(): Promise<AgentModel[]>;
   prepareRun?(opts: AgentRunOptions): Promise<void>;
   run(opts: AgentRunOptions): AgentRun;
   /**
