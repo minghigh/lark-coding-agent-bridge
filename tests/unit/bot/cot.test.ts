@@ -65,6 +65,39 @@ describe('COT event mapping', () => {
     expect(JSON.parse(result?.content ?? '{}').content).toBe('workspace');
   });
 
+  it('chunks detailed tool args and output without losing content', async () => {
+    const client = new FakeCotClient();
+    const publisher = new CotPublisher({
+      client,
+      chatId: 'oc_chat',
+      originMessageId: 'om_origin',
+      runId: 'run-long-tool',
+      scope: 'oc_chat',
+      inputPreview: 'run',
+    });
+    await publisher.start();
+    const command = 'x'.repeat(2_700);
+    const output = 'y'.repeat(3_100);
+
+    await consumeCotEvents(iterate([
+      { type: 'tool_use', id: 'tool-long', name: 'command_execution', input: { command } },
+      { type: 'tool_result', id: 'tool-long', output, isError: false },
+      { type: 'done', terminationReason: 'normal' },
+    ]), publisher, { detail: 'detailed' });
+
+    const args = client.events
+      .filter((event) => event.event_type === 'TOOL_CALL_ARGS')
+      .map((event) => JSON.parse(event.content).delta)
+      .join('');
+    const result = client.events
+      .filter((event) => event.event_type === 'TOOL_CALL_RESULT')
+      .map((event) => JSON.parse(event.content).content)
+      .join('');
+    expect(args).toBe(JSON.stringify({ command }));
+    expect(result).toBe(output);
+    expect(client.updateSizes.every((size) => size <= 10)).toBe(true);
+  });
+
   it('derives final answer state from text blocks only', () => {
     const state: RunState = {
       blocks: [
@@ -194,6 +227,7 @@ class FakeCotClient {
   failUpdate: Error | undefined;
   failCreate: Error | undefined;
   createResult: Record<string, unknown> | undefined;
+  updateSizes: number[] = [];
 
   async create(chatId: string, originMessageId?: string): Promise<Record<string, unknown>> {
     this.createCalls.push({ chatId, originMessageId });
@@ -203,6 +237,7 @@ class FakeCotClient {
 
   async update(_ref: unknown, events: readonly { event_type: string; content: string; timestamp: number }[]): Promise<void> {
     if (this.failUpdate) throw this.failUpdate;
+    this.updateSizes.push(events.length);
     this.events.push(...events);
   }
 

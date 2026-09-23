@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../agent/types';
+import { maskEmails } from '../card/mask-email';
 import type { CotMessagesMode, TenantBrand } from '../config/schema';
 import { log } from '../core/logger';
 import { toolHeaderText } from '../card/tool-render';
@@ -10,8 +11,8 @@ const ENDPOINTS: Record<TenantBrand, string> = {
 };
 
 const COT_UPDATE_THROTTLE_MS = 600;
-const COT_TOOL_OUTPUT_MAX = 1200;
-const COT_TEXT_MAX = 1200;
+const COT_CONTENT_CHUNK = 1200;
+const COT_EVENTS_PER_REQUEST = 10;
 // Bounds every CoT HTTP call. Without it a hung message_cot endpoint pins
 // start() — which runs before any agent event is drained and before the
 // plain-reply fallback — to undici's ~300s default.
@@ -197,7 +198,7 @@ export class CotPublisher {
     if (this.disabled || !this.ref) return;
     this.buffer.push({
       event_type: eventType,
-      content: JSON.stringify(content),
+      content: maskEmails(JSON.stringify(content)),
       timestamp: Date.now(),
     });
     this.scheduleFlush();
@@ -233,7 +234,7 @@ export class CotPublisher {
       if (this.buffer.length > 0 && !this.disabled) await this.flush();
       return;
     }
-    const events = this.buffer.splice(0);
+    const events = this.buffer.splice(0, COT_EVENTS_PER_REQUEST);
     if (events.length === 0) return;
     this.flushing = this.client.update(this.ref, events)
       .catch((err) => {
@@ -243,9 +244,9 @@ export class CotPublisher {
       })
       .finally(() => {
         this.flushing = undefined;
-        if (this.buffer.length > 0 && !this.disabled) this.scheduleFlush();
       });
     await this.flushing;
+    if (this.buffer.length > 0 && !this.disabled) await this.flush();
   }
 }
 
@@ -271,6 +272,8 @@ export async function consumeCotEvents(
   let textMessageIndex = 0;
   let textMessageId: string | undefined;
   const toolBrief = new Map<string, { name: string; input: unknown }>();
+  const toolOutput = new Map<string, string>();
+  const toolOutputIndex = new Map<string, number>();
   const reasoningMessageId = `reasoning-${publisher.runId}`;
   const finalStepId = `step-process-${publisher.runId}`;
 
@@ -287,10 +290,9 @@ export async function consumeCotEvents(
             role: 'reasoning',
           });
         }
-        publisher.enqueue('REASONING_MESSAGE_CONTENT', {
-          messageId: reasoningMessageId,
-          delta: truncateCot(evt.delta, COT_TEXT_MAX),
-        });
+        for (const delta of splitCot(evt.delta)) {
+          publisher.enqueue('REASONING_MESSAGE_CONTENT', { messageId: reasoningMessageId, delta });
+        }
         continue;
       }
       if (evt.type === 'tool_use') {
@@ -308,28 +310,51 @@ export async function consumeCotEvents(
           toolCallName: showSummary ? evt.name : 'tool',
         });
         if (detailed && evt.input !== undefined) {
-          publisher.enqueue('TOOL_CALL_ARGS', {
-            toolCallId,
-            delta: JSON.stringify(evt.input),
-          });
+          for (const delta of splitCot(JSON.stringify(evt.input))) {
+            publisher.enqueue('TOOL_CALL_ARGS', { toolCallId, delta });
+          }
         }
         publisher.enqueue('TOOL_CALL_END', { toolCallId });
+        continue;
+      }
+      if (evt.type === 'tool_output') {
+        if (opts.detail !== 'detailed') continue;
+        toolOutput.set(evt.id, `${toolOutput.get(evt.id) ?? ''}${evt.delta}`);
+        for (const content of splitCot(evt.delta)) {
+          const index = (toolOutputIndex.get(evt.id) ?? 0) + 1;
+          toolOutputIndex.set(evt.id, index);
+          publisher.enqueue('TOOL_CALL_RESULT', {
+            messageId: `tool-output-${evt.id}-${index}`,
+            toolCallId: evt.id,
+            role: 'tool',
+            content,
+          });
+        }
         continue;
       }
       if (evt.type === 'tool_result') {
         const detailed = opts.detail === 'detailed';
         const brief = toolBrief.get(evt.id);
-        publisher.enqueue('TOOL_CALL_RESULT', {
-          messageId: `tool-result-${evt.id}`,
-          toolCallId: evt.id,
-          role: 'tool',
-          content: detailed
-            ? truncateCot(evt.output ?? '', COT_TOOL_OUTPUT_MAX)
-            : brief
+        const streamed = toolOutput.get(evt.id) ?? '';
+        const result = detailed && evt.output.startsWith(streamed)
+          ? evt.output.slice(streamed.length)
+          : evt.output;
+        const contents = detailed
+          ? splitCot(result)
+          : [brief
               ? cotBriefToolTitle(brief.name, brief.input, evt.isError ? 'error' : 'done')
-              : '工具调用已完成',
-        });
+              : '工具调用已完成'];
+        for (const [index, content] of contents.entries()) {
+          publisher.enqueue('TOOL_CALL_RESULT', {
+            messageId: `tool-result-${evt.id}-${index + 1}`,
+            toolCallId: evt.id,
+            role: 'tool',
+            content,
+          });
+        }
         toolBrief.delete(evt.id);
+        toolOutput.delete(evt.id);
+        toolOutputIndex.delete(evt.id);
         continue;
       }
       if (evt.type === 'text') {
@@ -346,10 +371,9 @@ export async function consumeCotEvents(
           textMessageId = `text-${publisher.runId}-${++textMessageIndex}`;
           publisher.enqueue('TEXT_MESSAGE_START', { messageId: textMessageId, role: 'assistant' });
         }
-        publisher.enqueue('TEXT_MESSAGE_CONTENT', {
-          messageId: textMessageId,
-          delta: truncateCot(evt.delta, COT_TEXT_MAX),
-        });
+        for (const delta of splitCot(evt.delta)) {
+          publisher.enqueue('TEXT_MESSAGE_CONTENT', { messageId: textMessageId, delta });
+        }
         continue;
       }
       if (evt.type === 'final_text') continue;
@@ -420,9 +444,14 @@ function cotToolIcon(name: string): string {
   return 'default';
 }
 
-function truncateCot(value: unknown, max: number): string {
+function splitCot(value: unknown): string[] {
   const text = String(value ?? '');
-  return text.length > max ? `${text.slice(0, max)}...` : text;
+  if (!text) return [''];
+  const chunks: string[] = [];
+  for (let index = 0; index < text.length; index += COT_CONTENT_CHUNK) {
+    chunks.push(text.slice(index, index + COT_CONTENT_CHUNK));
+  }
+  return chunks;
 }
 
 function stringValue(value: unknown): string | undefined {

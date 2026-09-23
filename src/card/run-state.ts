@@ -104,6 +104,17 @@ export function reduce(state: RunState, evt: AgentEvent): RunState {
       return { ...state, blocks };
     }
 
+    case 'tool_output': {
+      return {
+        ...state,
+        blocks: state.blocks.map((b) =>
+          b.kind === 'tool' && b.tool.id === evt.id
+            ? { ...b, tool: { ...b.tool, output: `${b.tool.output ?? ''}${evt.delta}` } }
+            : b,
+        ),
+      };
+    }
+
     case 'error': {
       const terminal =
         evt.terminationReason === 'interrupted'

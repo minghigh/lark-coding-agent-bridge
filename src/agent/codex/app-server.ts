@@ -29,6 +29,7 @@ interface AgentRunState {
   tools: Map<string, string>;
   agentMessages: Set<string>;
   agentMessagePhases: Map<string, string>;
+  reasoningItems: Set<string>;
 }
 
 const DEFAULT_REASONING_EFFORT = 'xhigh';
@@ -73,6 +74,7 @@ export class CodexAppServer {
       tools: new Map(),
       agentMessages: new Set(),
       agentMessagePhases: new Map(),
+      reasoningItems: new Set(),
     };
     const active: RunState = { run: state, stopped: false };
     state.finish = () => this.finishRun(active);
@@ -307,7 +309,30 @@ export class CodexAppServer {
       case 'item/reasoning/textDelta':
       case 'item/reasoning/summaryTextDelta': {
         const delta = stringValue(params.delta);
+        const itemId = stringValue(params.itemId);
+        if (itemId) active.run.reasoningItems.add(itemId);
         if (delta) active.run.queue.push({ type: 'thinking', delta });
+        return;
+      }
+      case 'item/plan/delta':
+      case 'item/commandExecution/outputDelta':
+      case 'item/fileChange/outputDelta': {
+        const id = stringValue(params.itemId);
+        const delta = stringValue(params.delta);
+        if (id && delta) {
+          active.run.tools.set(id, `${active.run.tools.get(id) ?? ''}${delta}`);
+          active.run.queue.push({ type: 'tool_output', id, delta });
+        }
+        return;
+      }
+      case 'item/mcpToolCall/progress': {
+        const id = stringValue(params.itemId);
+        const message = stringValue(params.message);
+        if (id && message) {
+          const delta = `${message}\n`;
+          active.run.tools.set(id, `${active.run.tools.get(id) ?? ''}${delta}`);
+          active.run.queue.push({ type: 'tool_output', id, delta });
+        }
         return;
       }
       case 'item/started': {
@@ -318,42 +343,16 @@ export class CodexAppServer {
           if (id && phase) active.run.agentMessagePhases.set(id, phase);
           return;
         }
-        if (!item || !isCommandItem(item)) return;
-        const id = stringValue(item.id);
-        if (!id) return;
-        active.run.tools.set(id, '');
-        active.run.queue.push({
-          type: 'tool_use',
-          id,
-          name: 'command_execution',
-          input: { command: stringValue(item.command) ?? '' },
-        });
-        return;
-      }
-      case 'item/commandExecution/outputDelta': {
-        const id = stringValue(params.itemId);
-        const delta = stringValue(params.delta);
-        if (id && delta) active.run.tools.set(id, `${active.run.tools.get(id) ?? ''}${delta}`);
+        if (!item) return;
+        const event = toolUseForItem(item);
+        if (!event) return;
+        active.run.tools.set(event.id, '');
+        active.run.queue.push(event);
         return;
       }
       case 'item/completed': {
         const item = objectValue(params.item);
         if (!item) return;
-        if (isCommandItem(item)) {
-          const id = stringValue(item.id);
-          if (!id) return;
-          const exitCode = numberValue(item.exitCode ?? item.exit_code);
-          const status = stringValue(item.status);
-          active.run.queue.push({
-            type: 'tool_result',
-            id,
-            output:
-              stringValue(item.aggregatedOutput ?? item.output) ?? active.run.tools.get(id) ?? '',
-            isError: exitCode !== undefined ? exitCode !== 0 : status === 'failed' || status === 'error',
-          });
-          active.run.tools.delete(id);
-          return;
-        }
         if (isAgentMessageItem(item)) {
           const id = stringValue(item.id);
           const text = stringValue(item.text);
@@ -363,6 +362,21 @@ export class CodexAppServer {
             active.run.queue.push({ type: 'text', delta: text });
           }
           if (id) active.run.agentMessagePhases.delete(id);
+          return;
+        }
+        if (item.type === 'reasoning') {
+          const id = stringValue(item.id);
+          if (!id || !active.run.reasoningItems.has(id)) {
+            const text = [...stringArray(item.summary), ...stringArray(item.content)].join('\n\n');
+            if (text) active.run.queue.push({ type: 'thinking', delta: text });
+          }
+          if (id) active.run.reasoningItems.delete(id);
+          return;
+        }
+        const event = toolResultForItem(item, active.run.tools);
+        if (event) {
+          active.run.queue.push(event);
+          active.run.tools.delete(event.id);
         }
         return;
       }
@@ -469,6 +483,151 @@ function isCommandItem(item: JsonObject): boolean {
 
 function isAgentMessageItem(item: JsonObject): boolean {
   return item.type === 'agentMessage' || item.type === 'agent_message';
+}
+
+function toolUseForItem(item: JsonObject): Extract<AgentEvent, { type: 'tool_use' }> | undefined {
+  const id = stringValue(item.id);
+  const type = stringValue(item.type);
+  if (!id || !type) return undefined;
+  switch (type) {
+    case 'commandExecution':
+    case 'command_execution':
+      return { type: 'tool_use', id, name: 'command_execution', input: { command: item.command } };
+    case 'fileChange':
+      return { type: 'tool_use', id, name: 'apply_patch', input: { changes: item.changes } };
+    case 'mcpToolCall':
+      return {
+        type: 'tool_use',
+        id,
+        name: [stringValue(item.server), stringValue(item.tool)].filter(Boolean).join('.') || 'mcp',
+        input: item.arguments,
+      };
+    case 'dynamicToolCall':
+      return {
+        type: 'tool_use',
+        id,
+        name: [stringValue(item.namespace), stringValue(item.tool)].filter(Boolean).join('.') || 'tool',
+        input: item.arguments,
+      };
+    case 'collabAgentToolCall':
+      return {
+        type: 'tool_use',
+        id,
+        name: stringValue(item.tool) ?? 'agent',
+        input: pick(item, ['prompt', 'model', 'reasoningEffort', 'receiverThreadIds']),
+      };
+    case 'webSearch':
+      return { type: 'tool_use', id, name: 'web_search', input: pick(item, ['query', 'action']) };
+    case 'imageView':
+      return { type: 'tool_use', id, name: 'view_image', input: { path: item.path } };
+    case 'imageGeneration':
+      return {
+        type: 'tool_use',
+        id,
+        name: 'image_generation',
+        input: { prompt: item.revisedPrompt },
+      };
+    case 'plan':
+      return { type: 'tool_use', id, name: 'update_plan', input: { plan: item.text } };
+    case 'sleep':
+      return { type: 'tool_use', id, name: 'wait', input: { durationMs: item.durationMs } };
+    case 'subAgentActivity':
+      return { type: 'tool_use', id, name: 'subagent', input: pick(item, ['kind', 'agentPath']) };
+    case 'functionCallOutput':
+      return {
+        type: 'tool_use',
+        id,
+        name: [stringValue(item.namespace), stringValue(item.name)].filter(Boolean).join('.') || 'tool',
+        input: {},
+      };
+    case 'enteredReviewMode':
+    case 'exitedReviewMode':
+      return { type: 'tool_use', id, name: type, input: { review: item.review } };
+    case 'contextCompaction':
+      return { type: 'tool_use', id, name: 'context_compaction', input: {} };
+    default:
+      return undefined;
+  }
+}
+
+function toolResultForItem(
+  item: JsonObject,
+  streamed: ReadonlyMap<string, string>,
+): Extract<AgentEvent, { type: 'tool_result' }> | undefined {
+  const id = stringValue(item.id);
+  const type = stringValue(item.type);
+  if (!id || !type || !toolUseForItem(item)) return undefined;
+  const status = stringValue(item.status);
+  const error = objectValue(item.error);
+  let output: unknown;
+  switch (type) {
+    case 'commandExecution':
+    case 'command_execution':
+      output = item.aggregatedOutput ?? item.output ?? streamed.get(id) ?? '';
+      break;
+    case 'fileChange':
+      output = item.changes;
+      break;
+    case 'mcpToolCall':
+      output = objectValue(item.result)?.content ?? item.result ?? error?.message ?? '';
+      break;
+    case 'dynamicToolCall':
+      output = item.contentItems;
+      break;
+    case 'collabAgentToolCall':
+      output = pick(item, ['status', 'agentsStates']);
+      break;
+    case 'webSearch':
+      output = item.results ?? item.action ?? 'completed';
+      break;
+    case 'imageGeneration':
+      output = pick(item, ['status', 'savedPath', 'failure']);
+      break;
+    case 'plan':
+      output = item.text;
+      break;
+    case 'functionCallOutput':
+      output = item.output;
+      break;
+    default:
+      output = pick(item, [
+        'status',
+        'path',
+        'durationMs',
+        'kind',
+        'agentPath',
+        'review',
+      ]);
+  }
+  const exitCode = numberValue(item.exitCode ?? item.exit_code);
+  return {
+    type: 'tool_result',
+    id,
+    output: displayValue(output),
+    isError:
+      Boolean(error) ||
+      item.success === false ||
+      (exitCode !== undefined ? exitCode !== 0 : status === 'failed' || status === 'error'),
+  };
+}
+
+function displayValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(displayValue).filter(Boolean).join('\n');
+  if (isObject(value)) {
+    const text = stringValue(value.text) ?? stringValue(value.message);
+    if (text) return text;
+  }
+  if (value === undefined || value === null) return '';
+  return JSON.stringify(value, null, 2);
+}
+
+function pick(value: JsonObject, keys: readonly string[]): JsonObject {
+  return Object.fromEntries(keys.filter((key) => value[key] !== undefined).map((key) => [key, value[key]]));
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : [];
 }
 
 function isObject(value: unknown): value is JsonObject {

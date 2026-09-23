@@ -13,6 +13,7 @@ type TestRun = {
     tools: Map<string, string>;
     agentMessages: Set<string>;
     agentMessagePhases: Map<string, string>;
+    reasoningItems: Set<string>;
   };
 };
 
@@ -33,6 +34,7 @@ function testRun(
         tools: new Map(),
         agentMessages: new Set(),
         agentMessagePhases: new Map(),
+        reasoningItems: new Set(),
       },
     },
   };
@@ -162,5 +164,86 @@ describe('Codex app-server event mapping', () => {
     await expect(Promise.race([appServer.request('turn/start', {}), missingTimeout])).rejects.toThrow(
       'timed out',
     );
+  });
+
+  it('maps non-command Codex items and live tool output onto the shared event seam', () => {
+    const { active, push } = testRun();
+    const appServer = new CodexAppServer('ws://unused') as unknown as {
+      runs: Map<string, TestRun>;
+      handleNotification(method: string, params: Record<string, unknown>): void;
+    };
+    appServer.runs.set('thread-1', active);
+
+    appServer.handleNotification('item/started', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        id: 'mcp-1',
+        type: 'mcpToolCall',
+        server: 'docs',
+        tool: 'search',
+        arguments: { query: 'bridge events' },
+      },
+    });
+    appServer.handleNotification('item/mcpToolCall/progress', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'mcp-1',
+      message: 'searching',
+    });
+    appServer.handleNotification('item/completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        id: 'mcp-1',
+        type: 'mcpToolCall',
+        server: 'docs',
+        tool: 'search',
+        status: 'completed',
+        result: { content: [{ type: 'text', text: 'found it' }] },
+        error: null,
+      },
+    });
+
+    expect(push.mock.calls.map(([event]) => event)).toEqual([
+      {
+        type: 'tool_use',
+        id: 'mcp-1',
+        name: 'docs.search',
+        input: { query: 'bridge events' },
+      },
+      { type: 'tool_output', id: 'mcp-1', delta: 'searching\n' },
+      {
+        type: 'tool_result',
+        id: 'mcp-1',
+        output: 'found it',
+        isError: false,
+      },
+    ]);
+  });
+
+  it('keeps completed reasoning when the server emitted no reasoning deltas', () => {
+    const { active, push } = testRun();
+    const appServer = new CodexAppServer('ws://unused') as unknown as {
+      runs: Map<string, TestRun>;
+      handleNotification(method: string, params: Record<string, unknown>): void;
+    };
+    appServer.runs.set('thread-1', active);
+
+    appServer.handleNotification('item/completed', {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        id: 'reasoning-1',
+        type: 'reasoning',
+        summary: ['Inspecting the bridge'],
+        content: ['Checking event coverage'],
+      },
+    });
+
+    expect(push).toHaveBeenCalledWith({
+      type: 'thinking',
+      delta: 'Inspecting the bridge\n\nChecking event coverage',
+    });
   });
 });

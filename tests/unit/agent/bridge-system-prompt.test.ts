@@ -6,6 +6,13 @@ import {
 } from '../../../src/agent/bridge-system-prompt';
 
 describe('bridge system prompt bot collaboration rules', () => {
+  it('stays compact and names the structured sections the prompt builder actually emits', () => {
+    expect(BRIDGE_SYSTEM_PROMPT.length).toBeLessThan(6_000);
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('<quoted_messages>');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('<interactive_cards>');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('chatId');
+  });
+
   it('states that bots only receive messages via a real structured mention', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('只有被真实 @');
     expect(BRIDGE_SYSTEM_PROMPT).toContain('收不到');

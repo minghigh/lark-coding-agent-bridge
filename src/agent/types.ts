@@ -9,6 +9,7 @@ export type AgentEvent =
   | { type: 'final_text'; content: string }
   | { type: 'thinking'; delta: string }
   | { type: 'tool_use'; id: string; name: string; input: unknown }
+  | { type: 'tool_output'; id: string; delta: string }
   | { type: 'tool_result'; id: string; output: string; isError: boolean }
   | {
       type: 'usage';
