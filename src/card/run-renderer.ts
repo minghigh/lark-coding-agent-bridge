@@ -19,12 +19,18 @@ export interface RunCardRenderOptions {
   signCallback?: (action: string) => string;
   agentName?: string;
   timeline?: boolean;
+  answerOnlyText?: string;
 }
 
 export function renderCard(state: RunState, options: RunCardRenderOptions = {}): object {
+  if (options.answerOnlyText !== undefined) return cardEnvelope(state, [markdown(options.answerOnlyText)]);
   if (options.timeline) {
+    const hasProcess = state.blocks.some((block) => block.kind === 'tool' || !!block.content.trim());
     return cardEnvelope(state, [
-      timelinePanel(state),
+      ...(hasProcess || state.terminal === 'running' ? [timelinePanel(state)] : []),
+      ...(state.terminal !== 'running' && state.finalText?.trim()
+        ? [...(hasProcess ? [{ tag: 'hr' }] : []), markdown(state.finalText.trim())]
+        : []),
       ...(state.terminal === 'running' ? [stopButton(options)] : []),
     ]);
   }
@@ -95,10 +101,7 @@ function* groupBlocks(blocks: Block[]): Generator<Group> {
 }
 
 function timelinePanel(state: RunState): object {
-  const status = state.terminal === 'running' ? '进行中' :
-    state.terminal === 'done' ? '已完成' :
-      state.terminal === 'error' ? '出错' : '已结束';
-  const elapsed = state.elapsedMs === undefined ? '' : ` · ${formatElapsed(state.elapsedMs)}`;
+  const elapsed = state.elapsedMs === undefined ? '' : ` for ${formatElapsed(state.elapsedMs)}`;
   const entries = state.blocks.flatMap((block) => {
     if (block.kind === 'tool') return [timelineTool(block.tool)];
     const content = block.content.trim();
@@ -122,10 +125,9 @@ function timelinePanel(state: RunState): object {
   return {
     tag: 'collapsible_panel',
     expanded: state.terminal === 'running',
-    header: panelHeader(`🧠 **工作过程 · ${status}${elapsed}**`),
-    border: { color: state.terminal === 'error' ? 'red' : 'grey', corner_radius: '5px' },
+    header: panelHeader(`${state.terminal === 'running' ? 'Working' : 'Worked'}${elapsed}`),
     vertical_spacing: '8px',
-    padding: '12px 12px 12px 12px',
+    padding: '0px',
     elements: [markdown(content)],
   };
 }
@@ -157,7 +159,7 @@ function timelineTool(tool: ToolEntry): string {
 function formatElapsed(ms: number): string {
   const seconds = Math.max(1, Math.floor(ms / 1000));
   const minutes = Math.floor(seconds / 60);
-  return minutes ? `${minutes} 分 ${seconds % 60} 秒` : `${seconds} 秒`;
+  return minutes ? `${minutes}m ${seconds % 60}s` : `${seconds}s`;
 }
 
 function renderToolGroup(tools: ToolEntry[]): object[] {

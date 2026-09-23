@@ -210,6 +210,7 @@ describe('markdown stream startup failures', () => {
     // few seconds, watched it get recalled, and only then got the answer.
     const streamCalls: unknown[] = [];
     const h = await createHarness({
+      messageReply: 'card',
       events: [
         { type: 'final_text', content: 'FINAL_ONLY_SENTINEL' },
         { type: 'done', terminationReason: 'normal' },
@@ -227,11 +228,13 @@ describe('markdown stream startup failures', () => {
 
     expect(streamCalls).toHaveLength(0);
     expect(h.channel.sent).toHaveLength(1);
-    expect(lastMarkdown(h.channel)).toContain('FINAL_ONLY_SENTINEL');
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('FINAL_ONLY_SENTINEL');
+    expect(JSON.stringify(h.channel.sent[0]?.content)).not.toContain('collapsible_panel');
   });
 
   it('uploads generated images as real Feishu image messages', async () => {
     const h = await createHarness({
+      messageReply: 'card',
       events: [
         { type: 'generated_image', source: '/tmp/generated-pelican.png' },
         { type: 'final_text', content: '图片已生成。' },
@@ -243,7 +246,7 @@ describe('markdown stream startup failures', () => {
     await h.channel.handlers.message?.(message('om_image', 'draw'));
     await waitFor(() => h.channel.sent.length === 2);
 
-    expect(h.channel.sent[0]?.content).toEqual({ markdown: '图片已生成。' });
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('图片已生成。');
     expect(h.channel.sent[1]?.content).toEqual({
       image: { source: '/tmp/generated-pelican.png' },
     });
@@ -409,12 +412,13 @@ describe('markdown stream startup failures', () => {
     ).toBe(false);
   });
 
-  it('sends readable card progress and one plain final answer in card mode', async () => {
+  it('shows Codex process and final answer in one card in card mode', async () => {
     const progressCards: unknown[] = [];
     const h = await createHarness({
       messageReply: 'card',
       events: [
         { type: 'text', delta: 'progress update' },
+        { type: 'generated_image', source: '/tmp/process-image.png' },
         { type: 'final_text', content: 'FINAL_SENTINEL' },
         { type: 'done', terminationReason: 'normal' },
       ],
@@ -432,18 +436,38 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
+    await waitFor(() => JSON.stringify(progressCards).includes('FINAL_SENTINEL'));
     await waitFor(() => h.channel.sent.length === 1);
 
-    // Intermediate agent messages stream as progress; the final answer never
-    // leaks into the progress card (it is held back for the dedicated reply).
+    // The answer appears below the folded process in the same card.
     const progressJson = JSON.stringify(progressCards);
     expect(progressJson).toContain('progress update');
-    expect(progressJson).not.toContain('FINAL_SENTINEL');
+    expect(progressJson).toContain('FINAL_SENTINEL');
 
-    // The terminal answer arrives as one ordinary markdown reply.
-    expect(h.channel.sent).toHaveLength(1);
-    expect(h.channel.sent[0]?.content).toEqual({ markdown: 'FINAL_SENTINEL' });
-    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_card_final' });
+    expect(h.channel.sent[0]?.content).toEqual({ image: { source: '/tmp/process-image.png' } });
+  });
+
+  it('sends the answer separately if the Codex card stream fails', async () => {
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'thinking', delta: '检查代码' },
+        { type: 'final_text', content: 'CARD_FALLBACK_ANSWER' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input) => {
+        const producer = (input as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card?.producer;
+        await producer?.({ update: vi.fn(async () => {}) });
+        throw new Error('card stream failed');
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_card_fallback', 'run'));
+    await waitFor(() => h.channel.sent.length === 1);
+    expect(JSON.stringify(h.channel.sent[0]?.content)).toContain('CARD_FALLBACK_ANSWER');
   });
 
   it('keeps a card showing Codex reasoning when there is no other progress', async () => {
@@ -465,10 +489,10 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_reasoning_card', '检查'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => JSON.stringify(progressCards).includes('检查完毕。'));
 
     expect(JSON.stringify(progressCards)).toContain('检查当前状态');
-    expect(h.channel.sent[0]?.content).toEqual({ markdown: '检查完毕。' });
+    expect(h.channel.sent).toHaveLength(0);
   });
 });
 

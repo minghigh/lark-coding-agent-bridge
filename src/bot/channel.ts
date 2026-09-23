@@ -1135,6 +1135,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     if (replyMode === 'card') {
       let latestState: RunState = initialState;
       let producerStarted = false;
+      let cardDelivered = false;
       let cardCtrl:
         | { update(next: object | ((current: object) => object)): Promise<void> }
         | undefined;
@@ -1171,7 +1172,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         },
       );
       try {
-        await awaitRenderAwareStream({
+        cardDelivered = await awaitRenderAwareStream({
           mode: replyMode,
           progress,
           renderDone,
@@ -1192,12 +1193,15 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       }
       await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
       if (controls.profileConfig.agentKind === 'codex') {
+        const finalState = finalReplyState(progress, filterForPrefs(latestState));
         await sendFinalReply({
           channel,
           chatId,
           scope,
-          state: finalReplyState(progress, filterForPrefs(latestState)),
-          replyMode: 'markdown',
+          state: cardDelivered && progress.opened() && !progress.abandoned()
+            ? { ...finalState, blocks: [], finalText: undefined }
+            : finalState,
+          replyMode: !cardDelivered && finalState.finalText ? 'card' : 'markdown',
           sendOpts,
           cardRenderOptions,
         });
@@ -1323,7 +1327,7 @@ interface LazyProgressStream {
  * The SDK starts a stream eagerly: `channel.stream(...)` sends a card before
  * the producer runs, and finishes it with a "(no content)" placeholder when the
  * producer never supplied any text. A Codex round that only produces a final
- * answer (delivered separately by `sendFinalReply`) used to hit exactly that:
+ * answer (embedded in an existing card or delivered by `sendFinalReply`) used to hit exactly that:
  * an empty card sat in the chat for seconds until `recall-empty` cleaned it up.
  */
 function createLazyProgressStream(
@@ -1463,7 +1467,7 @@ async function sendFinalReply(input: {
   state: RunState;
   replyMode: ReturnType<typeof getMessageReplyMode>;
   sendOpts: { replyTo: string; replyInThread?: boolean };
-  cardRenderOptions: { signCallback?: (action: string) => string };
+  cardRenderOptions: { signCallback?: (action: string) => string; timeline?: boolean };
 }): Promise<void> {
   const body = renderText(input.state);
   const images = input.state.generatedImages ?? [];
@@ -1479,7 +1483,9 @@ async function sendFinalReply(input: {
   if (body.trim() && input.replyMode === 'card') {
     const result = await input.channel.send(
       input.chatId,
-      { card: renderCard(input.state, input.cardRenderOptions) },
+      { card: renderCard(input.state, input.cardRenderOptions.timeline
+        ? { ...input.cardRenderOptions, answerOnlyText: body }
+        : input.cardRenderOptions) },
       input.sendOpts,
     );
     requireMessageReceipt(result, 'card');
@@ -1714,7 +1720,7 @@ async function awaitRenderAwareStream(input: {
   renderDone: Promise<RunState>;
   producerStarted: () => boolean;
   fallback: (state: RunState) => Promise<void>;
-}): Promise<void> {
+}): Promise<boolean> {
   const streamResult = input.progress.settled.then(
     () => ({ kind: 'stream' as const, ok: true as const }),
     (err) => ({ kind: 'stream' as const, ok: false as const, err }),
@@ -1730,7 +1736,7 @@ async function awaitRenderAwareStream(input: {
       const rendered = await renderResult;
       if (!rendered.ok) throw rendered.err;
       await runFallbackReply(input.mode, rendered.state, input.fallback);
-      return;
+      return false;
     }
     throw first.err;
   }
@@ -1738,7 +1744,7 @@ async function awaitRenderAwareStream(input: {
   if (first.kind === 'stream') {
     const rendered = await renderResult;
     if (!rendered.ok) throw rendered.err;
-    return;
+    return true;
   }
 
   // Nothing durable ever showed up, so no progress message was opened at all
@@ -1747,7 +1753,7 @@ async function awaitRenderAwareStream(input: {
   if (!input.progress.opened()) {
     log.info('outbound', 'progress-stream-skipped', { mode: input.mode });
     await runFallbackReply(input.mode, first.state, input.fallback);
-    return;
+    return false;
   }
 
   // The run ended before the stream did. A producer that hasn't started yet is
@@ -1770,7 +1776,7 @@ async function awaitRenderAwareStream(input: {
           log.fail('stream', result.err, { mode: input.mode, step: 'stream-terminal-late' });
         }
       });
-      return;
+      return false;
     }
     // Still nothing on screen after the grace window: give up on the stream and
     // reply without it. `abandon()` keeps a late producer from rendering the
@@ -1778,7 +1784,7 @@ async function awaitRenderAwareStream(input: {
     input.progress.abandon();
     log.warn('stream', 'producer-not-started-before-agent-terminal', { mode: input.mode });
     await runFallbackReply(input.mode, first.state, input.fallback);
-    return;
+    return false;
   }
 
   if (!terminal.ok) {
@@ -1788,7 +1794,9 @@ async function awaitRenderAwareStream(input: {
     if (input.producerStarted()) throw terminal.err;
     log.fail('stream', terminal.err, { mode: input.mode, step: 'stream' });
     await runFallbackReply(input.mode, first.state, input.fallback);
+    return false;
   }
+  return true;
 }
 
 async function runFallbackReply(

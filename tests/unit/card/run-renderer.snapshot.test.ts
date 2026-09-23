@@ -86,7 +86,7 @@ describe('run card renderer snapshots', () => {
       { type: 'tool_use', id: 'test', name: 'command_execution', input: { command: 'vitest run' } },
       { type: 'tool_result', id: 'test', output: '705 tests passed', isError: false },
       { type: 'thinking', delta: '最后确认结果。' },
-      { type: 'final_text', content: '最终答案只单独发送。' },
+      { type: 'final_text', content: '这是最终答案。' },
     ];
     const running = renderCard({ ...stateFrom(events), elapsedMs: 42_000 }, {
       agentName: 'Codex', timeline: true,
@@ -98,19 +98,23 @@ describe('run card renderer snapshots', () => {
     };
     const content = panel.elements[0]?.content ?? '';
     expect(panel.expanded).toBe(true);
-    expect(panel.header.title.content).toContain('工作过程 · 进行中 · 42 秒');
+    expect(panel.header.title.content).toBe('Working for 42s');
+    expect(panel).not.toHaveProperty('border');
+    expect(running.body.elements).toHaveLength(2);
     expect(content.indexOf('先检查代码')).toBeLessThan(content.indexOf('读取文件'));
     expect(content.indexOf('读取文件')).toBeLessThan(content.indexOf('发现字号过小'));
     expect(content.indexOf('发现字号过小')).toBeLessThan(content.indexOf('`vitest run`'));
     expect(content.indexOf('`vitest run`')).toBeLessThan(content.indexOf('最后确认结果'));
     expect(content).toContain('705 tests passed');
-    expect(content).not.toContain('最终答案只单独发送');
+    expect(content).not.toContain('这是最终答案');
 
     const done = renderCard({ ...stateFrom([...events, { type: 'done', terminationReason: 'normal' }]), elapsedMs: 42_000 }, {
       agentName: 'Codex', timeline: true,
-    }) as { body: { elements: Array<{ expanded: boolean }> } };
-    expect(done.body.elements).toHaveLength(1);
+    }) as { body: { elements: Array<{ expanded: boolean; content?: string; header?: { title: { content: string } } }> } };
+    expect(done.body.elements).toHaveLength(3);
     expect(done.body.elements[0]?.expanded).toBe(false);
+    expect(done.body.elements[0]?.header?.title.content).toBe('Worked for 42s');
+    expect(done.body.elements[2]?.content).toBe('这是最终答案。');
   });
 
   it('renders done, error, interrupted, and idle-timeout terminal states', () => {
