@@ -547,7 +547,7 @@ describe('markdown stream startup failures', () => {
     expect(JSON.stringify(progressCards)).not.toContain('检查完毕。');
   });
 
-  it('replays a long interleaved Codex event stream without dropping its tail', async () => {
+  it('replays interleaved Codex events with one compact process card and a separate answer', async () => {
     const progressCards: unknown[] = [];
     const h = await createHarness({
       messageReply: 'card',
@@ -577,11 +577,16 @@ describe('markdown stream startup failures', () => {
       .map((item) => (item.content as { card?: unknown }).card)
       .filter((card) => card && JSON.stringify(card).includes('Worked'))];
     const process = processCards.map((card) => JSON.stringify(card)).join('');
-    expect(processCards.length).toBeGreaterThan(1);
+    expect(processCards).toHaveLength(1);
     expect(process).toContain('THINKING_BEFORE_TOOL');
-    expect(process).toContain('TOOL_OUTPUT_TAIL');
+    expect(process).toContain('inspect-size');
     expect(process).toContain('THINKING_AFTER_TOOL');
-    expect(process).toContain('SECOND_TOOL_RESULT');
+    expect(process).toContain('finish-check');
+    expect(process).not.toContain('TOOL_OUTPUT_TAIL');
+    expect(process).not.toContain('SECOND_TOOL_RESULT');
+    expect(process.indexOf('THINKING_BEFORE_TOOL')).toBeLessThan(process.indexOf('inspect-size'));
+    expect(process.indexOf('inspect-size')).toBeLessThan(process.indexOf('THINKING_AFTER_TOOL'));
+    expect(process.indexOf('THINKING_AFTER_TOOL')).toBeLessThan(process.indexOf('finish-check'));
     expect(process).not.toContain('已省略');
     expect(JSON.stringify(progressCards)).not.toContain('FINAL_RESULT');
     expect(JSON.stringify(h.channel.sent.at(-1)?.content)).toContain('FINAL_RESULT');

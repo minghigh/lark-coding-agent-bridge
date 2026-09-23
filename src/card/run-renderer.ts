@@ -138,7 +138,8 @@ function timelinePanel(state: RunState, elements: object[], page: number, total:
 
 function timelinePages(state: RunState): object[][] {
   const elements = state.blocks.flatMap((block) => {
-    if (block.kind === 'tool') return timelineTool(block.tool);
+    // One visible row per call; stdout remains in RunState, not the card.
+    if (block.kind === 'tool') return [timelineTool(block.tool)];
     return splitByBytes(block.content, TIMELINE_CHUNK_MAX_BYTES)
       .filter((part) => part.trim())
       .map(markdown);
@@ -160,7 +161,7 @@ function timelinePages(state: RunState): object[][] {
   return pages;
 }
 
-function timelineTool(tool: ToolEntry): object[] {
+function timelineTool(tool: ToolEntry): object {
   const icon = tool.status === 'error' ? '❌' : tool.status === 'running' ? '⏳' :
     tool.name === 'command_execution' || tool.name === 'Bash' ? '⌘' :
       tool.name === 'apply_patch' || tool.name === 'Edit' || tool.name === 'Write' ? '✏️' :
@@ -173,33 +174,9 @@ function timelineTool(tool: ToolEntry): object[] {
     .replace(`**${tool.name}**`, `**${name ?? tool.name}**`);
   const divider = header.indexOf(' — ');
   const styledHeader = terminal && divider >= 0
-    ? `${header.slice(0, divider)} · \`${header.slice(divider + 3).replace(/`/g, '\\`')}\``
+    ? `${header.slice(0, divider)} · ${header.slice(divider + 3).replace(/[\\`*_\[\]]/g, '\\$&')}`
     : header;
-  const input = tool.input && typeof tool.input === 'object'
-    ? tool.input as Record<string, unknown> : {};
-  const command = typeof input.command === 'string' ? input.command : undefined;
-  const inputText = command ?? (Object.keys(input).length ? JSON.stringify(input, null, 2) : '');
-  const inputParts = splitByBytes(inputText, TIMELINE_CHUNK_MAX_BYTES)
-    .map((part) => `**调用**\n\`\`\`text\n${escapeFence(part)}\n\`\`\``);
-  const outputParts = splitByBytes(tool.output ?? '', TIMELINE_CHUNK_MAX_BYTES)
-    .map((part) => `**输出**\n\`\`\`text\n${escapeFence(part)}\n\`\`\``);
-  const body = [...inputParts, ...outputParts];
-  if (body.length === 2 && Buffer.byteLength(body.join('\n\n')) < 6_000) {
-    body.splice(0, 2, body.join('\n\n'));
-  }
-  if (!body.length) body.push(tool.status === 'running' ? '_运行中…_' : '_无输出_');
-  return body.map((part, index) => ({
-    tag: 'collapsible_panel',
-    expanded: tool.status === 'running',
-    header: panelHeader(`${styledHeader}${body.length > 1 ? ` · ${index + 1}/${body.length}` : ''}`),
-    vertical_spacing: '8px',
-    padding: '0px',
-    elements: [markdown(part)],
-  }));
-}
-
-function escapeFence(content: string): string {
-  return content.replace(/\`\`\`/g, '\`\`\\\`');
+  return markdown(styledHeader);
 }
 
 function splitByBytes(content: string, maxBytes: number): string[] {
@@ -320,8 +297,8 @@ function stopButton(options: RunCardRenderOptions): object {
   }
   return {
     tag: 'button',
-    text: { tag: 'plain_text', content: '⏹ 终止' },
-    type: 'danger',
+    text: { tag: 'plain_text', content: '停止生成' },
+    type: 'default',
     behaviors: [{ type: 'callback', value }],
   };
 }
