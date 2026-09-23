@@ -40,6 +40,10 @@ export interface SandboxConfig {
 
 export interface CodexConfig {
   binaryPath: string;
+  /** Shared app-server endpoint used by Feishu and `codex --remote`. */
+  appServerUrl?: string;
+  /** Reuse one Codex thread across regular Feishu IM chats until /new. */
+  sharedSession?: boolean;
   realpath?: string;
   version?: string;
   sha256?: string;
@@ -378,6 +382,8 @@ function normalizeWorkspaces(input: {
 function normalizeCodex(input: CodexConfig & { flags?: unknown }): CodexConfig {
   const codex: CodexConfig = {
     binaryPath: input.binaryPath,
+    ...(typeof input.appServerUrl === 'string' ? { appServerUrl: input.appServerUrl } : {}),
+    ...(input.sharedSession === true ? { sharedSession: true } : {}),
     ...(typeof input.realpath === 'string' ? { realpath: input.realpath } : {}),
     ...(typeof input.version === 'string' ? { version: input.version } : {}),
     ...(typeof input.sha256 === 'string' ? { sha256: input.sha256 } : {}),

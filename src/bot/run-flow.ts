@@ -18,6 +18,7 @@ import {
 import type { RunExecution, RunExecutor } from '../runtime/run-executor';
 import { RunRejected, type RunRejectedCode } from '../runtime/errors';
 import type { SessionCatalog } from '../session/catalog';
+import { policyScopeFor, sessionScopeFor } from '../session/shared-scope';
 import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
 
@@ -67,6 +68,7 @@ export type StartRunFlowResult =
 
 export interface RecordRunSessionEventInput {
   scopeId: string;
+  sessionScopeId?: string;
   sessions: SessionStore;
   sessionCatalog?: SessionCatalog;
   capability: AgentCapability;
@@ -75,8 +77,13 @@ export interface RecordRunSessionEventInput {
 }
 
 export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFlowResult> {
+  const sessionScopeId = sessionScopeFor(
+    input.profileConfig,
+    input.scopeId,
+    input.scope.source,
+  );
   const requestedCwd =
-    input.workspaces.cwdFor(input.scopeId) ?? input.profileConfig.workspaces.default ?? '';
+    input.workspaces.cwdFor(sessionScopeId) ?? input.profileConfig.workspaces.default ?? '';
   const workspace = await resolveWorkingDirectory(requestedCwd);
   if (!workspace.ok) {
     return {
@@ -90,7 +97,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
   }
 
   const policy = evaluateRunPolicy({
-    scope: input.scope,
+    scope: policyScopeFor(input.profileConfig, input.scope),
     attachments: input.attachments,
     prompt: input.prompt,
     requestedCwd,
@@ -115,7 +122,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
   let threadId: string | undefined;
   if (input.sessionCatalog) {
     const catalogEntry = input.sessionCatalog.activeFor({
-      scopeId: input.scopeId,
+      scopeId: sessionScopeId,
       agentId: input.capability.agentId,
       cwdRealpath: workspace.cwdRealpath,
       policyFingerprint: policy.policyFingerprint,
@@ -129,18 +136,18 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     }
   }
   if (!resumeFrom && input.capability.agentId === 'claude') {
-    resumeFrom = input.sessions.resumeFor(input.scopeId, workspace.cwdRealpath);
+    resumeFrom = input.sessions.resumeFor(sessionScopeId, workspace.cwdRealpath);
     sessionId = resumeFrom;
-    const stale = input.sessions.getRaw(input.scopeId);
+    const stale = input.sessions.getRaw(sessionScopeId);
     if (!resumeFrom && stale?.cwd && stale.cwd !== workspace.cwdRealpath) {
-      input.sessions.clear(input.scopeId);
+      input.sessions.clear(sessionScopeId);
     }
   }
 
   let execution: RunExecution;
   try {
     execution = await input.executor.submit({
-      scopeId: input.scopeId,
+      scopeId: sessionScopeId,
       policy,
       sessionId,
       threadId,
@@ -188,11 +195,12 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
 
 export function recordRunSessionEvent(input: RecordRunSessionEventInput): void {
   if (input.event.type !== 'system') return;
+  const sessionScopeId = input.sessionScopeId ?? input.scopeId;
   if (input.capability.agentId === 'claude' && input.event.sessionId) {
     const cwdRealpath = input.event.cwd ?? input.policy.cwdRealpath;
-    input.sessions.set(input.scopeId, input.event.sessionId, cwdRealpath);
+    input.sessions.set(sessionScopeId, input.event.sessionId, cwdRealpath);
     input.sessionCatalog?.upsertActive({
-      scopeId: input.scopeId,
+      scopeId: sessionScopeId,
       agentId: 'claude',
       cwdRealpath,
       policyFingerprint: input.policy.policyFingerprint,
@@ -202,7 +210,7 @@ export function recordRunSessionEvent(input: RecordRunSessionEventInput): void {
   }
   if (input.capability.agentId === 'codex' && input.event.threadId) {
     input.sessionCatalog?.upsertActive({
-      scopeId: input.scopeId,
+      scopeId: sessionScopeId,
       agentId: 'codex',
       cwdRealpath: input.policy.cwdRealpath,
       policyFingerprint: input.policy.policyFingerprint,

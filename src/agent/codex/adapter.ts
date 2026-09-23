@@ -16,10 +16,12 @@ import type {
   AgentRunOptions,
 } from '../types';
 import { buildCodexArgs } from './argv';
+import { CodexAppServer } from './app-server';
 import { CodexJsonlTranslator, type CodexFinishReason } from './jsonl';
 
 export interface CodexAdapterOptions {
   binary: string;
+  appServerUrl?: string;
   profileStateDir: string;
   codexHome?: string;
   inheritCodexHome?: boolean;
@@ -45,6 +47,7 @@ export class CodexAdapter implements AgentAdapter {
   private readonly sandbox: SandboxMode;
   private readonly defaultStopGraceMs: number;
   private readonly larkChannel: LarkChannelEnvContext | undefined;
+  private readonly appServer: CodexAppServer | undefined;
   private botIdentity: AgentBotIdentity | undefined;
 
   constructor(opts: CodexAdapterOptions) {
@@ -57,6 +60,7 @@ export class CodexAdapter implements AgentAdapter {
     this.sandbox = opts.sandbox ?? 'danger-full-access';
     this.defaultStopGraceMs = opts.stopGraceMs ?? 5000;
     this.larkChannel = opts.larkChannel;
+    this.appServer = opts.appServerUrl ? new CodexAppServer(opts.appServerUrl) : undefined;
   }
 
   setBotIdentity(identity: AgentBotIdentity): void {
@@ -91,6 +95,13 @@ export class CodexAdapter implements AgentAdapter {
   run(opts: AgentRunOptions): AgentRun {
     if (!opts.cwd) {
       throw new Error('cwd is required for CodexAdapter.run');
+    }
+
+    if (this.appServer) {
+      return this.appServer.run({
+        ...opts,
+        prompt: prefixBridgeSystemPrompt(opts.prompt, this.botIdentity),
+      });
     }
 
     const args = buildCodexArgs({

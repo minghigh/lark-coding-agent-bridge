@@ -14,6 +14,7 @@ import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
 import { commandSessionCatalogIdentity } from '../bot/session-catalog-identity';
 import { lookupMessageThreadId } from '../bot/thread-id';
+import { sessionScopeFor } from '../session/shared-scope';
 
 /** Marker key on a button's value object that flags the cardAction as
  * a callback that should be forwarded back to the agent instead
@@ -94,6 +95,7 @@ export async function handleCardAction(deps: CardDispatchDeps): Promise<void> {
       channel: deps.channel,
       msg,
       scope,
+      sessionScope: sessionScopeFor(deps.controls.profileConfig, scope),
       chatMode: mode,
       sessions: deps.sessions,
       sessionCatalog: deps.sessionCatalog,

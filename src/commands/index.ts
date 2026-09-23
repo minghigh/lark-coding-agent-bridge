@@ -118,13 +118,12 @@ export interface CommandContext {
   channel: LarkChannel;
   msg: NormalizedMessage;
   /**
-   * Session scope string. For p2p / regular group it equals `msg.chatId`;
-   * for topic groups it's `${chatId}:${threadId}` (so each topic gets its
-   * own session / cwd / active-run). All handlers should read/write
-   * session / workspace / activeRuns through this — never through
-   * `msg.chatId` directly.
+   * Original Feishu scope: p2p / regular group is `msg.chatId`; topic groups
+   * use `${chatId}:${threadId}`. Keep it for display and targeted commands.
    */
   scope: string;
+  /** Effective agent session scope; Codex shared mode maps all IMs here. */
+  sessionScope?: string;
   /** Resolved chat mode for `msg.chatId`. Used by /status to surface the
    * scope semantic to the user (`topic` shows "话题独立 session"). */
   chatMode: 'p2p' | 'group' | 'topic';
@@ -215,7 +214,16 @@ function isAdminCommand(cmd: string): boolean {
 
 export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
   const trimmed = ctx.msg.content.trim();
-  if (!trimmed.startsWith('/')) return false;
+  if (!trimmed.startsWith('/')) {
+    if (!isNewConversationRequest(trimmed)) return false;
+    try {
+      await handleNew('', ctx);
+    } catch (err) {
+      log.fail('command', err, { cmd: 'new-conversation' });
+      reportMetric('command_fail', 1, { step: 'dispatch' });
+    }
+    return true;
+  }
   const parts = trimmed.split(/\s+/);
   const cmd = parts[0] ?? '';
   const args = parts.slice(1).join(' ');
@@ -239,6 +247,15 @@ export async function tryHandleCommand(ctx: CommandContext): Promise<boolean> {
     reportMetric('command_fail', 1, { step: 'dispatch' });
   }
   return true;
+}
+
+function isNewConversationRequest(text: string): boolean {
+  const normalized = text.replace(/[。！!？?]+$/g, '');
+  return /^(?:请)?新开(?:一个)?(?:对话|会话)$/.test(normalized);
+}
+
+function commandSessionScope(ctx: CommandContext): string {
+  return ctx.sessionScope ?? ctx.scope;
 }
 
 /** Invoke a named command handler (e.g. from a card button click). */
@@ -331,14 +348,14 @@ async function handleNew(args: string, ctx: CommandContext): Promise<void> {
     return handleNewChat(rawName, ctx);
   }
 
-  const wasRunning = ctx.activeRuns.interrupt(ctx.scope);
+  const wasRunning = ctx.activeRuns.interrupt(commandSessionScope(ctx));
   if (ctx.sessionCatalog && ctx.sessionCatalogIdentity) {
     ctx.sessionCatalog.archiveActive({
       ...ctx.sessionCatalogIdentity,
       now: Date.now(),
     });
   }
-  ctx.sessions.clear(ctx.scope);
+  ctx.sessions.clear(commandSessionScope(ctx));
   await reply(ctx, wasRunning ? '已中断当前任务并开始新会话。' : '已开始新会话。');
 }
 
@@ -397,9 +414,9 @@ async function handleCd(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, workspace.userVisible);
     return;
   }
-  ctx.activeRuns.interrupt(ctx.scope);
-  ctx.workspaces.setCwd(ctx.scope, workspace.cwdRealpath);
-  ctx.sessions.clear(ctx.scope);
+  ctx.activeRuns.interrupt(commandSessionScope(ctx));
+  ctx.workspaces.setCwd(commandSessionScope(ctx), workspace.cwdRealpath);
+  ctx.sessions.clear(commandSessionScope(ctx));
   await reply(ctx, `✓ 已切换 cwd 到 \`${workspace.cwdRealpath}\`\n（session 已重置）`);
 }
 
@@ -462,9 +479,9 @@ async function handleWsUse(name: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, workspace.userVisible);
     return;
   }
-  ctx.activeRuns.interrupt(ctx.scope);
-  ctx.workspaces.setCwd(ctx.scope, workspace.cwdRealpath);
-  ctx.sessions.clear(ctx.scope);
+  ctx.activeRuns.interrupt(commandSessionScope(ctx));
+  ctx.workspaces.setCwd(commandSessionScope(ctx), workspace.cwdRealpath);
+  ctx.sessions.clear(commandSessionScope(ctx));
   await reply(ctx, `✓ 已切换到 \`${name}\` (${workspace.cwdRealpath})\n（session 已重置）`);
 }
 
@@ -491,7 +508,7 @@ function scopedWorkspaceName(ctx: CommandContext, name: string): string {
   return [
     ctx.controls.profile,
     ctx.controls.botOwnerId ?? 'owner-unknown',
-    ctx.scope,
+    commandSessionScope(ctx),
     name,
   ].join(WORKSPACE_NAME_SEPARATOR);
 }
@@ -593,7 +610,7 @@ async function handleResume(args: string, ctx: CommandContext): Promise<void> {
   }
 
   const sessions = await listClaudeResumeHistory(ctx, cwd, limit);
-  const currentSession = ctx.sessions.getRaw(ctx.scope);
+  const currentSession = ctx.sessions.getRaw(commandSessionScope(ctx));
   const identity = ctx.sessionCatalogIdentity;
   const entries = sessions.map((s) => ({
     sessionId: identity
@@ -614,7 +631,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     const entry = ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity);
     const resolved = consumeResumeCandidate(sessionId, ctx.sessionCatalogIdentity);
     if (resolved) {
-      ctx.activeRuns.interrupt(ctx.scope);
+      ctx.activeRuns.interrupt(commandSessionScope(ctx));
       if (ctx.sessionCatalogIdentity.agentId === 'codex') {
         ctx.sessionCatalog.upsertActive({
           scopeId: ctx.sessionCatalogIdentity.scopeId,
@@ -631,7 +648,7 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
           policyFingerprint: ctx.sessionCatalogIdentity.policyFingerprint,
           sessionId: resolved.sessionId!,
         });
-        ctx.sessions.set(ctx.scope, resolved.sessionId!, ctx.sessionCatalogIdentity.cwdRealpath);
+        ctx.sessions.set(commandSessionScope(ctx), resolved.sessionId!, ctx.sessionCatalogIdentity.cwdRealpath);
       }
       await reply(ctx, RESUME_APPLIED_REPLY);
       return;
@@ -645,9 +662,9 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
       await reply(ctx, '当前上下文不可恢复这个会话，请重新选择当前工作区和权限策略下的会话。');
       return;
     }
-    ctx.activeRuns.interrupt(ctx.scope);
+    ctx.activeRuns.interrupt(commandSessionScope(ctx));
     if (ctx.sessionCatalogIdentity.agentId === 'claude') {
-      ctx.sessions.set(ctx.scope, sessionId, ctx.sessionCatalogIdentity.cwdRealpath);
+      ctx.sessions.set(commandSessionScope(ctx), sessionId, ctx.sessionCatalogIdentity.cwdRealpath);
     }
     await reply(ctx, RESUME_APPLIED_REPLY);
     return;
@@ -663,8 +680,8 @@ async function applyResume(sessionId: string, ctx: CommandContext): Promise<void
     await reply(ctx, '请先使用 /cd <path> 选择工作目录，再查看或恢复会话。');
     return;
   }
-  ctx.activeRuns.interrupt(ctx.scope);
-  ctx.sessions.set(ctx.scope, sessionId, cwd);
+  ctx.activeRuns.interrupt(commandSessionScope(ctx));
+  ctx.sessions.set(commandSessionScope(ctx), sessionId, cwd);
   await reply(ctx, RESUME_APPLIED_REPLY);
 }
 
@@ -752,7 +769,7 @@ async function listCodexResumeHistory(
 }
 
 function effectiveWorkspaceCwd(ctx: CommandContext): string | undefined {
-  return ctx.workspaces.cwdFor(ctx.scope) ?? ctx.controls.profileConfig.workspaces.default;
+  return ctx.workspaces.cwdFor(commandSessionScope(ctx)) ?? ctx.controls.profileConfig.workspaces.default;
 }
 
 function selectedResumeCwd(ctx: CommandContext): string | undefined {
@@ -811,7 +828,7 @@ async function larkCliStatus(ctx: CommandContext): Promise<'app' | 'user-ready' 
 
 async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   const cwd = effectiveWorkspaceCwd(ctx);
-  const sess = ctx.sessions.getRaw(ctx.scope);
+  const sess = ctx.sessions.getRaw(commandSessionScope(ctx));
   const isCodex = ctx.controls.profileConfig.agentKind === 'codex';
   const catalogEntry =
     isCodex && ctx.sessionCatalog && ctx.sessionCatalogIdentity
@@ -826,7 +843,7 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
     agentName: ctx.agent.displayName,
     runtimeAccess: runtimeAccessStatus(ctx.controls.profileConfig),
     larkCliStatus: await larkCliStatus(ctx),
-    activeRun: Boolean(ctx.activeRuns.get(ctx.scope)),
+    activeRun: Boolean(ctx.activeRuns.get(commandSessionScope(ctx))),
     activeScopes: ctx.activeRuns.scopes().filter((scope) => !scope.startsWith('comment:')),
     activeCommentScopes: ctx.activeRuns.scopes().filter((scope) => scope.startsWith('comment:')),
     queue: ctx.processPool?.snapshot(),
@@ -852,7 +869,7 @@ async function handleStop(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, '❌ 指定 scope 停止任务仅管理员可用。');
     return;
   }
-  const scope = targetScope || ctx.scope;
+  const scope = targetScope || commandSessionScope(ctx);
   const ok = ctx.activeRuns.interrupt(scope);
   log.info('command', 'stop', {
     scope,
@@ -881,7 +898,7 @@ async function handleTimeout(args: string, ctx: CommandContext): Promise<void> {
     await reply(ctx, '❌ 指定 scope 设置 timeout 仅管理员可用。');
     return;
   }
-  const scope = parsed.scope;
+  const scope = parsed.targeted ? parsed.scope : commandSessionScope(ctx);
   const value = parsed.value;
   const globalMs = getRunIdleTimeoutMs(ctx.controls.cfg);
   const globalMinutes = globalMs ? Math.round(globalMs / 60_000) : 0;

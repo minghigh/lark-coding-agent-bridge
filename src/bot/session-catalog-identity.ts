@@ -5,6 +5,7 @@ import type { AccessDecision } from '../policy/access';
 import { evaluateRunPolicy } from '../policy/run-policy';
 import { resolveWorkingDirectory } from '../policy/workspace';
 import type { SessionCatalogIdentity } from '../session/catalog';
+import { policyScopeFor, sessionScopeFor } from '../session/shared-scope';
 import type { WorkspaceStore } from '../workspace/store';
 import type { ChatMode } from './chat-mode-cache';
 
@@ -17,7 +18,8 @@ export async function commandSessionCatalogIdentity(input: {
   access: AccessDecision;
 }): Promise<SessionCatalogIdentity | undefined> {
   const requestedCwd =
-    input.workspaces.cwdFor(input.scope) ?? input.controls.profileConfig.workspaces.default;
+    input.workspaces.cwdFor(sessionScopeFor(input.controls.profileConfig, input.scope)) ??
+    input.controls.profileConfig.workspaces.default;
   if (!requestedCwd) return undefined;
   const workspace = await resolveWorkingDirectory(requestedCwd);
   if (!workspace.ok) return undefined;
@@ -26,12 +28,12 @@ export async function commandSessionCatalogIdentity(input: {
       ? codexCapability(input.controls.profileConfig)
       : claudeCapability(input.controls.profileConfig);
   const policy = evaluateRunPolicy({
-    scope: {
+    scope: policyScopeFor(input.controls.profileConfig, {
       source: 'im',
       chatId: input.msg.chatId,
       actorId: input.msg.senderId,
       ...(input.mode === 'topic' && input.msg.threadId ? { threadId: input.msg.threadId } : {}),
-    },
+    }),
     attachments: [],
     prompt: '',
     requestedCwd,
@@ -45,7 +47,7 @@ export async function commandSessionCatalogIdentity(input: {
   });
   if (!policy.ok) return undefined;
   return {
-    scopeId: input.scope,
+    scopeId: sessionScopeFor(input.controls.profileConfig, input.scope),
     agentId: capability.agentId,
     cwdRealpath: workspace.cwdRealpath,
     policyFingerprint: policy.policyFingerprint,

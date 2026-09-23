@@ -60,6 +60,7 @@ import { ChatModeCache, type ChatMode } from './chat-mode-cache';
 import { handleCommentMention } from './comments';
 import { recordRunSessionEvent, startRunFlow } from './run-flow';
 import { commandSessionCatalogIdentity } from './session-catalog-identity';
+import { sessionScopeFor } from '../session/shared-scope';
 import { startKeepalive } from './keepalive';
 import { PendingQueue } from './pending-queue';
 import { ProcessPool } from './process-pool';
@@ -759,6 +760,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     channel,
     msg: emsg,
     scope,
+    sessionScope: sessionScopeFor(controls.profileConfig, scope),
     chatMode,
     sessions,
     workspaces,
@@ -1003,6 +1005,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   const recordSession = (evt: AgentEvent): void => {
     recordRunSessionEvent({
       scopeId: scope,
+      sessionScopeId: sessionScopeFor(controls.profileConfig, scope),
       sessions,
       sessionCatalog,
       capability,
