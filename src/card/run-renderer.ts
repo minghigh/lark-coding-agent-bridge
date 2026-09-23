@@ -138,7 +138,7 @@ function timelinePanel(state: RunState, elements: object[], page: number, total:
 
 function timelinePages(state: RunState): object[][] {
   const elements = state.blocks.flatMap((block) => {
-    // One visible row per call; stdout remains in RunState, not the card.
+    // One panel per call; stdout remains in RunState, not the card.
     if (block.kind === 'tool') return [timelineTool(block.tool)];
     return splitByBytes(block.content, TIMELINE_CHUNK_MAX_BYTES)
       .filter((part) => part.trim())
@@ -176,7 +176,21 @@ function timelineTool(tool: ToolEntry): object {
   const styledHeader = terminal && divider >= 0
     ? `${header.slice(0, divider)} · ${header.slice(divider + 3).replace(/[\\`*_\[\]]/g, '\\$&')}`
     : header;
-  return markdown(styledHeader);
+  const input = tool.input && typeof tool.input === 'object'
+    ? tool.input as Record<string, unknown> : {};
+  const detail = typeof input.command === 'string'
+    ? input.command : Object.keys(input).length ? JSON.stringify(input, null, 2) : '';
+  const visible = splitByBytes(detail, TIMELINE_CHUNK_MAX_BYTES)[0] ?? '';
+  return {
+    tag: 'collapsible_panel',
+    expanded: tool.status === 'running',
+    header: panelHeader(styledHeader),
+    vertical_spacing: '8px',
+    padding: '0px',
+    elements: [markdown(visible
+      ? `\`\`\`text\n${visible.replace(/\`\`\`/g, '\`\`\\\`')}\n\`\`\`${visible.length < detail.length ? '\n_调用参数过长，仅展示开头_' : ''}`
+      : '_无调用参数_')],
+  };
 }
 
 function splitByBytes(content: string, maxBytes: number): string[] {

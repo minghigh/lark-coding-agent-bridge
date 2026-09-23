@@ -107,7 +107,7 @@ describe('run card renderer snapshots', () => {
     expect(content.indexOf('vitest run')).toBeLessThan(content.indexOf('最后确认结果'));
     expect(content).not.toContain('705 tests passed');
     expect(content).not.toContain('这是最终答案');
-    expect(panel.elements.filter((element) => element.tag === 'collapsible_panel')).toHaveLength(0);
+    expect(panel.elements.filter((element) => element.tag === 'collapsible_panel')).toHaveLength(2);
 
     const done = renderCard({ ...stateFrom([...events, { type: 'done', terminationReason: 'normal' }]), elapsedMs: 42_000 }, {
       agentName: 'Codex', timeline: true,
@@ -157,8 +157,8 @@ describe('run card renderer snapshots', () => {
     expect(cards).toHaveLength(1);
     expect(card.body.elements[0]?.tag).toBe('collapsible_panel');
     expect(card.body.elements[0]?.elements?.filter((element) =>
-      (element as { tag?: string }).tag === 'collapsible_panel')).toHaveLength(0);
-    expect(rendered.match(/cat README\.md/g)).toHaveLength(1);
+      (element as { tag?: string }).tag === 'collapsible_panel')).toHaveLength(1);
+    expect(rendered.match(/cat README\.md/g)).toHaveLength(2); // summary + expanded command, one call
     expect(rendered.indexOf('先检查实验状态')).toBeLessThan(rendered.indexOf('cat README.md'));
     expect(rendered.indexOf('cat README.md')).toBeLessThan(rendered.indexOf('继续检查最新 run'));
     expect(rendered).not.toContain('UNWANTED_TOOL_BODY');
