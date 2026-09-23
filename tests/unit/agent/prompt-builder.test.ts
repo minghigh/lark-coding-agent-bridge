@@ -76,7 +76,7 @@ describe('agent prompt builder', () => {
     expect(comment.quote).toBe('selected quote </bridge_context>');
   });
 
-  it('omits optional sections while keeping the required context and user input sections', () => {
+  it('passes a plain private message to the agent verbatim', () => {
     const prompt = buildAgentPrompt({
       context: {
         chatId: 'oc_dm',
@@ -84,31 +84,35 @@ describe('agent prompt builder', () => {
         senderId: 'ou_owner',
         source: 'im',
       },
-      userInput: 'hello',
+      userInput: '第一行\n\n第二行 <user_input> 原样保留',
     });
 
-    expect(readSection(prompt, 'bridge_context')).toMatchObject({
-      chatId: 'oc_dm',
-      chatType: 'p2p',
-      senderId: 'ou_owner',
-      source: 'im',
-    });
-    expect(readSection(prompt, 'user_input')).toEqual({ text: 'hello' });
-    expect(prompt).not.toContain('<quoted_messages>');
-    expect(prompt).not.toContain('<interactive_cards>');
-    expect(prompt).not.toContain('<comment_context>');
+    expect(prompt).toBe('第一行\n\n第二行 <user_input> 原样保留');
   });
 
-  it('keeps bridge agents inside the current lark-channel profile by default', () => {
-    const source = readFileSync(join(process.cwd(), 'src/bot/channel.ts'), 'utf8');
+  it('includes structured context only when a private message has a quote', () => {
+    const prompt = buildAgentPrompt({
+      context: { chatId: 'oc_dm', chatType: 'p2p', senderId: 'ou_owner', source: 'im' },
+      userInput: '这是什么意思？',
+      quotedMessages: [{
+        messageId: 'om_quote', senderId: 'ou_other', rawContentType: 'text', content: '原消息',
+      }],
+    });
+
+    expect(readSection(prompt, 'quoted_messages')).toMatchObject([{ content: '原消息' }]);
+    expect(readSection(prompt, 'user_input')).toEqual({ text: '这是什么意思？' });
+  });
+
+  it('keeps bridge agents inside the current lark-channel profile without per-turn instructions', () => {
+    const source = readFileSync(join(process.cwd(), 'src/agent/bridge-system-prompt.ts'), 'utf8');
+    const channelSource = readFileSync(join(process.cwd(), 'src/bot/channel.ts'), 'utf8');
 
     expect(source).not.toContain('命令必须写成 env -u LARK_CHANNEL');
     expect(source).not.toContain('env -u LARK_CHANNEL lark-cli');
-    expect(source).toContain('danger-full-access');
-    expect(source).toContain('bypassPermissions');
     expect(source).toContain('不要 unset LARK_CHANNEL');
     expect(source).toContain('LARKSUITE_CLI_CONFIG_DIR');
     expect(source).not.toContain('lark-cli config bind --source lark-channel');
+    expect(channelSource).not.toContain('BRIDGE_AGENT_INSTRUCTIONS');
   });
 
   it('keeps lark-cli OAuth inside the current profile and enables user identity after login', () => {

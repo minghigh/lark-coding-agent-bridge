@@ -81,6 +81,22 @@ describe('bot identity injection into the agent adapter', () => {
 });
 
 describe('sender identity in bridge_context', () => {
+  it('sends an ordinary private message as the exact conversation text', async () => {
+    const h = await createHarness();
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(
+      message({
+        messageId: 'om_private',
+        chatType: 'p2p',
+        content: '真实用户问题\n\n第二行',
+      }),
+    );
+    await waitFor(() => h.agent.runOptions.length === 1);
+
+    expect(h.agent.runOptions[0]?.prompt).toBe('真实用户问题\n\n第二行');
+  });
+
   it('marks a bot sender via raw sender_type and injects botOpenId and mentions', async () => {
     const h = await createHarness();
     await startTestBridge(h);
@@ -363,6 +379,7 @@ function createControls(profileConfig: ReturnType<typeof createDefaultProfileCon
 function message(input: {
   messageId: string;
   content: string;
+  chatType?: 'group' | 'p2p';
   senderId?: string;
   senderName?: string;
   rawSenderType?: string;
@@ -371,17 +388,17 @@ function message(input: {
   return {
     messageId: input.messageId,
     chatId: 'oc_chat',
-    chatType: 'group',
+    chatType: input.chatType ?? 'group',
     senderId: input.senderId ?? 'ou_user',
     senderName: input.senderName ?? 'User',
     content: input.content,
     rawContentType: 'text',
     resources: [],
-    mentions: input.mentions ?? [
+    mentions: input.mentions ?? (input.chatType === 'p2p' ? [] : [
       { key: '@_user_1', openId: 'ou_bot', name: 'Bridge', isBot: true },
-    ],
+    ]),
     mentionAll: false,
-    mentionedBot: true,
+    mentionedBot: input.chatType !== 'p2p',
     createTime: 1760000001000,
     ...(input.rawSenderType
       ? {

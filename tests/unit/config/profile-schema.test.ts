@@ -51,6 +51,17 @@ describe('profile schema', () => {
     });
   });
 
+  it('drops legacy shared-session settings so chats cannot merge again', () => {
+    const cfg = normalizeProfileConfig({
+      schemaVersion: 2,
+      agentKind: 'codex',
+      accounts: { app },
+      codex: { binaryPath: '/usr/local/bin/codex', sharedSession: true },
+    });
+
+    expect(cfg.codex).not.toHaveProperty('sharedSession');
+  });
+
   it('defaults deployment mode to personal and parses team', () => {
     const fresh = createDefaultProfileConfig({ agentKind: 'claude', accounts: { app } });
     expect(fresh.mode).toBe('personal');

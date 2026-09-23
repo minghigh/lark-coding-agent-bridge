@@ -84,6 +84,20 @@ export interface BuildAgentPromptInput {
 }
 
 export function buildAgentPrompt(input: BuildAgentPromptInput): string {
+  if (
+    input.context.source === 'im' &&
+    input.context.chatType === 'p2p' &&
+    !input.context.mentions?.length &&
+    !input.instructions?.length &&
+    !input.topicContext?.length &&
+    !input.quotedMessages?.length &&
+    !input.interactiveCards?.length &&
+    !input.comment &&
+    !input.attachments?.length
+  ) {
+    return input.userInput;
+  }
+
   const sections = [
     promptSection('bridge_context', input.context),
     input.instructions && input.instructions.length > 0
