@@ -47,6 +47,13 @@ describe('bridge system prompt bot collaboration rules', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('不得复述旧状态');
   });
 
+  it('requires useful progress details instead of a boolean or coarse runner state', () => {
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('不能只回答“是/否”');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('粗粒度状态');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('继续查询');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('已完成/总数');
+  });
+
   it('tells the agent not to mimic the batch sender annotation format', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('[名字 (user|bot)]');
     expect(BRIDGE_SYSTEM_PROMPT).toContain('不要模仿');
