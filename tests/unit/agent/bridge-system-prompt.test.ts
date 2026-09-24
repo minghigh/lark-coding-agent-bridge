@@ -52,6 +52,8 @@ describe('bridge system prompt bot collaboration rules', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('粗粒度状态');
     expect(BRIDGE_SYSTEM_PROMPT).toContain('继续查询');
     expect(BRIDGE_SYSTEM_PROMPT).toContain('已完成/总数');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('只读进度快照命令');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('不能提前称为已开始训练');
   });
 
   it('tells the agent not to mimic the batch sender annotation format', () => {
