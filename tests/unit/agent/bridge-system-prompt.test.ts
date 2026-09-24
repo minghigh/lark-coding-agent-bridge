@@ -40,6 +40,13 @@ describe('bridge system prompt bot collaboration rules', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('mentions');
   });
 
+  it('requires a fresh authoritative query for mutable runtime status', () => {
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('<bridge_instructions>');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('受信运行策略');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('本轮必须先使用工具查询');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('不得复述旧状态');
+  });
+
   it('tells the agent not to mimic the batch sender annotation format', () => {
     expect(BRIDGE_SYSTEM_PROMPT).toContain('[名字 (user|bot)]');
     expect(BRIDGE_SYSTEM_PROMPT).toContain('不要模仿');
